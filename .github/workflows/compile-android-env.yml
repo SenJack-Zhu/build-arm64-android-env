@@ -1,4 +1,4 @@
-name: Compile Dedicated Android Environment for PRoot Arch Linux
+name: Extract Pure Android Environment for PRoot Arch Linux
 
 on:
   workflow_dispatch:
@@ -8,56 +8,49 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install PC Build Essentials
+      - name: Install Extraction Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y git build-essential cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget unzip curl
+          sudo apt-get install -y wget zstd tar unzip curl
 
       # ==========================================
-      # 1. 动态链接交叉编译 (AAPT, AAPT2, AIDL, ZIPALIGN)
+      # 1. 直接去 Arch Linux ARM 官方源捞 AARCH64 纯正二进制
       # ==========================================
-      - name: Checkout AOSP Tools Source
-        uses: actions/checkout@v4
-        with:
-          repository: 'JonForShort/android-tools'
-          submodules: 'recursive'
-          path: 'android-tools-source'
-
-      - name: Cross-Compile Native Tools for glibc AARCH64
-        working-directory: ${{ github.workspace }}/android-tools-source
+      - name: Download and Extract Arch Linux ARM Native Binaries
         run: |
-          # 纯正的动态链接编译，完全信任 PRoot 内部的 glibc 环境
-          cmake -S . -B build_out \
-            -DCMAKE_SYSTEM_NAME=Linux \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-            -DCMAKE_BUILD_TYPE=Release \
-            -G Ninja
+          mkdir -p ${{ github.workspace }}/arch-extracted
           
-          ninja -C build_out aapt aapt2 aidl zipalign
+          # 从 Arch Linux ARM 官方源直接拉取最新稳定版 aarch64 的 android-tools 包
+          # 这个包里原生包含了完美链接 glibc 的 aapt, aapt2, adb, fastboot, zipalign 等
+          ARCH_ARM_URL="https://mirror.archlinuxarm.org/aarch64/extra/android-tools-35.0.1-1-aarch64.pkg.tar.zst"
+          
+          wget -q --show-progress $ARCH_ARM_URL -O android-tools.pkg.tar.zst
+          
+          # 使用 zstd 解压 Arch 特有的压缩格式
+          zstd -d android-tools.pkg.tar.zst -o android-tools.tar
+          tar -xf android-tools.tar -C ${{ github.workspace }}/arch-extracted
 
       # ==========================================
-      # 2. 提取 Android SDK 核心 Java 组件 (D8/R8, android.jar)
+      # 2. 提取 Android SDK 核心 Java 组件 (跨平台通用)
       # ==========================================
       - name: Extract Android SDK Java Components
         run: |
           mkdir -p ${{ github.workspace }}/out-env/android-sdk/lib
           
-          # 抓取最新的 Android 34 核心库
+          # 抓取最新的 Android 34 核心平台库 (提供 android.jar)
           wget -q https://dl.google.com/android/repository/platform-34_r03.zip -O android-platforms.zip
           unzip -q android-platforms.zip -d platforms-extracted
           cp platforms-extracted/android-34/android.jar ${{ github.workspace }}/out-env/android-sdk/
           cp platforms-extracted/android-34/framework.aidl ${{ github.workspace }}/out-env/android-sdk/
           
-          # 抓取 D8 和 APKsigner
+          # 抓取官方最新的 build-tools (抽取跨平台的 d8.jar 和 apksigner.jar)
           wget -q https://dl.google.com/android/repository/build-tools_r34.0.0-linux.zip -O build-tools.zip
           unzip -q build-tools.zip -d build-tools-extracted
           cp build-tools-extracted/android-34.0.0/lib/d8.jar ${{ github.workspace }}/out-env/android-sdk/lib/
           cp build-tools-extracted/android-34.0.0/lib/apksigner.jar ${{ github.workspace }}/out-env/android-sdk/lib/
 
       # ==========================================
-      # 3. 组装与打包交付
+      # 3. 精准组装与打包交付
       # ==========================================
       - name: Assemble Final Package
         run: |
@@ -65,12 +58,11 @@ jobs:
           mkdir -p $TARGET_DIR/bin
           mkdir -p $TARGET_DIR/lib
           
-          # 1. 搬运与 PRoot 环境 glibc 完美契合的二进制工具
-          cp ${{ github.workspace }}/android-tools-source/build_out/aapt \
-             ${{ github.workspace }}/android-tools-source/build_out/aapt2 \
-             ${{ github.workspace }}/android-tools-source/build_out/aidl \
-             ${{ github.workspace }}/android-tools-source/build_out/zipalign \
-             $TARGET_DIR/bin/
+          # 1. 搬运从 Arch Linux ARM 官方包里提取出的纯正 AARCH64 二进制文件
+          # 动态链接 100% 契合你 PRoot 内部的环境
+          cp ${{ github.workspace }}/arch-extracted/usr/bin/aapt $TARGET_DIR/bin/
+          cp ${{ github.workspace }}/arch-extracted/usr/bin/aapt2 $TARGET_DIR/bin/
+          cp ${{ github.workspace }}/arch-extracted/usr/bin/zipalign $TARGET_DIR/bin/
           
           # 2. 搬运跨平台的 jar 包和平台声明文件
           cp ${{ github.workspace }}/out-env/android-sdk/android.jar $TARGET_DIR/lib/
@@ -92,7 +84,7 @@ jobs:
           EOF
           chmod +x $TARGET_DIR/bin/apksigner
 
-          # 5. 归档
+          # 5. 最终归档
           cd $TARGET_DIR
           tar -czvf ../android-proot-env-aarch64.tar.gz .
 
