@@ -1,90 +1,12 @@
-name: Fixed Ironclad Android Environment Build
-
-on:
-  workflow_dispatch:
-
-jobs:
-  build-proot-env:
-    runs-on: ubuntu-latest
-
-    steps:
-      # ==========================================
-      # 1. 检出当前仓库（拿回你的 2.4M android-tools）
-      # ==========================================
-      - name: Checkout Local Package
-        uses: actions/checkout@v4
-
-      # ==========================================
-      # 2. 按照日志提示的精确包名进行安装（绝不踩空）
-      # ==========================================
-      - name: Install Base and Android Tools from Ubuntu Mirror
+- name: 克隆官方 AOSP 核心工具链源码 (绝对不 404)
         run: |
-          sudo apt-get update
-          # 直接锁死日志里明确存在的 30.0.3 编译器和平台版本
-          sudo apt-get install -y xz-utils tar google-android-build-tools-30.0.3-installer google-android-platform-23-installer
+          # 切换到 Actions 虚拟机的安全工作目录
+          cd $GITHUB_WORKSPACE
           
-      # ==========================================
-      # 3. 完美的 Linux 原生解压你上传的 Arch 包
-      # ==========================================
-      - name: Extract Arch Linux ARM Binaries
-        run: |
-          mkdir -p ${{ github.workspace }}/arch-extracted
-          LOCAL_PKG="${{ github.workspace }}/libs/android-tools-35.0.2-25-aarch64.pkg.tar.xz"
+          # 直接拉取 Google 官方 AOSP 专门托管独立 aapt2 构建逻辑的完整标准仓库
+          # 这个地址由 Google 官方长期维护，走标准的 HTTPS 协议，Actions 虚拟机直连秒过
+          git clone --depth=1 https://android.googlesource.com/platform/frameworks/base aosp-frameworks-base
           
-          if [ ! -f "$LOCAL_PKG" ]; then
-            echo "错误：本地 libs 目录中没有检测到包！请确认已 push 到仓库！"
-            exit 1
-          fi
-          
-          tar -xJf "$LOCAL_PKG" -C ${{ github.workspace }}/arch-extracted
-
-      # ==========================================
-      # 4. 物理组装：直接从本地 Ubuntu 系统中搬运跨平台 Jar 包
-      # ==========================================
-      - name: Assemble Final Package from Local System
-        run: |
-          TARGET_DIR="${{ github.workspace }}/android-proot-env"
-          mkdir -p $TARGET_DIR/bin
-          mkdir -p $TARGET_DIR/lib
-          
-          # 1. 搬运你给的原生 AARCH64 二进制文件
-          cp ${{ github.workspace }}/arch-extracted/usr/bin/aapt $TARGET_DIR/bin/
-          cp ${{ github.workspace }}/arch-extracted/usr/bin/aapt2 $TARGET_DIR/bin/
-          cp ${{ github.workspace }}/arch-extracted/usr/bin/zipalign $TARGET_DIR/bin/
-          
-          # 2. 从 Ubuntu 系统中直接捞出跨平台的 Java 核心组件（天生多架构通用）
-          # 自动寻找系统路径下的 d8.jar / r8.jar 以及 apksigner.jar
-          find /usr/share/java/ /usr/lib/android-sdk/ -name "r8.jar" -o -name "d8.jar" -exec cp {} $TARGET_DIR/lib/d8.jar \;
-          find /usr/share/java/ /usr/lib/android-sdk/ -name "apksigner.jar" -exec cp {} $TARGET_DIR/lib/apksigner.jar \;
-          find /usr/lib/android-sdk/ -name "android.jar" -exec cp {} $TARGET_DIR/lib/android.jar \;
-
-          # 3. 补齐标准 D8 快捷脚本
-          cat << 'EOF' > $TARGET_DIR/bin/d8
-          #!/bin/sh
-          if [ -f "$ANDROID_HOME/lib/r8.jar" ]; then
-              exec java -cp "$ANDROID_HOME/lib/r8.jar" com.android.tools.r8.D8 "$@"
-          else
-              exec java -cp "$ANDROID_HOME/lib/d8.jar" com.android.tools.r8.D8 "$@"
-          fi
-          EOF
-          chmod +x $TARGET_DIR/bin/d8
-
-          # 4. 补齐标准 apksigner 快捷脚本
-          cat << 'EOF' > $TARGET_DIR/bin/apksigner
-          #!/bin/sh
-          exec java -jar "$ANDROID_HOME/lib/apksigner.jar" "$@"
-          EOF
-          chmod +x $TARGET_DIR/bin/apksigner
-
-          # 5. 一体化完美归档
-          cd $TARGET_DIR
-          tar -czvf ../android-proot-env-aarch64.tar.gz .
-
-      # ==========================================
-      # 5. 上传成品
-      # ==========================================
-      - name: Upload Package
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-proot-env-aarch64
-          path: ${{ github.workspace }}/android-proot-env-aarch64.tar.gz
+          # 进入 aapt2 的核心 C++ 源码腹地
+          cd aosp-frameworks-base/tools/aapt2
+          echo "AAPT2 核心源码已精准锁定位置：" && pwd
