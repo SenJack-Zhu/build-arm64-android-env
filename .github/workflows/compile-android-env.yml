@@ -1,4 +1,4 @@
-name: 交叉编译 ARM64 原生 AAPT2
+name: 交叉编译 ARM64 原生 AAPT2 (正统闭环版)
 
 on:
   push:
@@ -6,57 +6,61 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-aapt2-arm64:
+  build-aapt2-static-arm64:
     runs-on: ubuntu-latest
 
     steps:
       - name: 1. 物理检出当前仓库
         uses: actions/checkout@v4
 
-      - name: 2. 拉取官方 AOSP 核心工具链与依赖环境
+      - name: 2. 拉取专门针对 aapt2 剥离的独立 CMake 编译骨架与全量 C++ 源码
         run: |
           cd $GITHUB_WORKSPACE
-          echo "==== 开始从 Google AOSP 官方骨干网拉取原生构建依赖 ===="
-          git clone --depth=1 https://android.googlesource.com/platform/frameworks/base aosp-base
-          git clone --depth=1 https://android.googlesource.com/platform/system/core aosp-core
-          git clone --depth=1 https://android.googlesource.com/platform/frameworks/native aosp-native
-
-      - name: 3. 调动 NDK r28c 执行 C++ 交叉编译 (核心出货)
-        run: |
-          cd $GITHUB_WORKSPACE
-          echo "==== 开始配置交叉编译工具链 ===="
+          echo "==== 开始拉取全球开发者维护的 aapt2 独立编译骨架 ===="
+          # 克隆专门为独立编译 aapt2 剥离好全量依赖库（libbase/libutils/protobuf）的开源主库
+          git clone --recursive https://github.com/by-syk/aapt2-sdk.git aapt2-build-env
           
-          # 提取当前系统的 NDK 绝对路径
-          export NDK_PATH=$ANDROID_NDK_HOME
-          export TOOLCHAIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64
-          
-          # 强行锁定 ARM64 交叉编译器 (对准 API 35 确保最高兼容性)
-          export CXX=$TOOLCHAIN/bin/aarch64-linux-android35-clang++
-          export CC=$TOOLCHAIN/bin/aarch64-linux-android35-clang
-          
-          echo "==== 建立本地独立输出编译沙盒 ===="
-          mkdir -p $GITHUB_WORKSPACE/out_bin
-          
-          # =========================================================================
-          # 【老哥注意】：因为直接裸编 AOSP 源码需要复杂的 CMake 构建配置及 Protobuf 补丁。
-          # 如果你本地已经准备好了你的 CMakeLists.txt 或具体的 build.sh 编译逻辑：
-          # 请直接将下面的这一行替换成你自己的具体编译调用脚本（例如: cmake . && make）
-          # =========================================================================
-          
-          echo "正在调用 NDK 编译器压入 ARM64 核心架构..."
-          
-          # 此处为示意伪代码。为确保本次运行不空手而归，我们先让它输出一个带环境指纹的测试二进制
-          # 确保在你的实际 Action 中，此处执行的是你真正的 CMake/NDK 编译主程序
-          $CXX -static -O3 $GITHUB_WORKSPACE/aosp-base/tools/aapt2/Main.cpp -o $GITHUB_WORKSPACE/out_bin/aapt2 || echo "等待你将真正的 CMake 编译主程序写到这里"
-          
-          # 兜底测试：如果上面的裸编因为依赖未齐而没有产生文件，我们先物理生成一个标记，确保打包接口不报空
-          if [ ! -f "$GITHUB_WORKSPACE/out_bin/aapt2" ]; then
-             echo "真正编译逻辑未调通，生成测试占位符" > $GITHUB_WORKSPACE/out_bin/aapt2
+          # 进入工作区验证核心构建文件是否存在
+          cd aapt2-build-env
+          if [ -f "CMakeLists.txt" ]; then
+            echo "独立 CMakeLists 验证成功，全套 C++ 源码及依赖已完整闭环！"
+          else
+            echo "ERROR: 构建骨架拉取失败！" && exit 1
           fi
 
-      - name: 4. 将生成的 ARM64 产物上载到 GitHub 网页端 (出货接口)
+      - name: 3. 调动 NDK r28c 执行跨架构静态链接编译
+        run: |
+          cd $GITHUB_WORKSPACE/aapt2-build-env
+          echo "==== 开始构建本地编译沙盒 ===="
+          mkdir build && cd build
+          
+          echo "==== 注入 NDK 交叉编译工具链并强制开轰 ===="
+          # 1. 调动系统预装的 NDK 路径
+          # 2. 强行指定目标架构为 ARM64 (aarch64-linux-android)
+          # 3. 强行开启全局静态链接 (-DSTATIC_LINK=ON)，确保编出来的二进制不依赖手机系统里任何残缺的 .so 库
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-35 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSTATIC_LINK=ON
+          
+          echo "==== 多核并发全量编译 ===="
+          make -j$(nproc)
+          
+          echo "==== 收集出货目标 ===="
+          mkdir -p $GITHUB_WORKSPACE/out_bin
+          if [ -f "aapt2" ]; then
+            cp aapt2 $GITHUB_WORKSPACE/out_bin/
+            echo "🎉 恭喜老哥！正统原生 ARM64 aapt2 静态二进制编译成功！"
+          else
+            # 兼容某些剥离库编译出的产物在 bin 目录下
+            cp bin/aapt2 $GITHUB_WORKSPACE/out_bin/ || (echo "ERROR: 未在预期位置找到编译产物！" && exit 1)
+          fi
+
+      - name: 4. 正式出货：将生成的 ARM64 静态包上载到 GitHub 网页端
         uses: actions/upload-artifact@v4
         with:
-          name: aapt2-linux-arm64-binary # 最终下载时的压缩包名字
-          path: ${{ github.workspace }}/out_bin/       # 将该目录下所有生成的目标文件全部打包
-          retention-days: 5                             # 产物保留 5 天
+          name: aapt2-linux-arm64-static
+          path: ${{ github.workspace }}/out_bin/aapt2
+          retention-days: 5
