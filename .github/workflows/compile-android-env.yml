@@ -1,12 +1,47 @@
-- name: 克隆官方 AOSP 核心工具链源码 (绝对不 404)
+name: 交叉编译 ARM64 原生 AAPT2
+
+# 运行接口配置：支持代码推送触发 + 网页端手动一键轰炸
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # 这个就是你在 GitHub 页面上直接能点到的手动运行接口
+
+jobs:
+  build-aapt2-arm64:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. 物理检出当前仓库
+        uses: actions/checkout@v4
+
+      - name: 2. 初始化 Android NDK 环境
+        uses: actions/setup-android@v3
+        with:
+          ndk-version: '28.0.12433566' # 对应 NDK r28c 最新稳定版
+
+      - name: 3. 拉取官方 AOSP 核心工具链与依赖环境 (绝对不 404)
         run: |
-          # 切换到 Actions 虚拟机的安全工作目录
           cd $GITHUB_WORKSPACE
+          echo "==== 开始从 Google AOSP 官方骨干网拉取原生构建依赖 ===="
           
-          # 直接拉取 Google 官方 AOSP 专门托管独立 aapt2 构建逻辑的完整标准仓库
-          # 这个地址由 Google 官方长期维护，走标准的 HTTPS 协议，Actions 虚拟机直连秒过
-          git clone --depth=1 https://android.googlesource.com/platform/frameworks/base aosp-frameworks-base
+          # 克隆包含 aapt2 核心 C++ 源码的官方主仓库
+          git clone --depth=1 https://android.googlesource.com/platform/frameworks/base aosp-base
           
-          # 进入 aapt2 的核心 C++ 源码腹地
-          cd aosp-frameworks-base/tools/aapt2
-          echo "AAPT2 核心源码已精准锁定位置：" && pwd
+          # 克隆 aapt2 编译时必须强行 include 的底层系统核心库（libutils, libbase, liblog 等头文件来源）
+          git clone --depth=1 https://android.googlesource.com/platform/system/core aosp-core
+          
+          # 克隆 Android 资源框架核心头文件库（libandroidfw 来源）
+          git clone --depth=1 https://android.googlesource.com/platform/frameworks/native aosp-native
+          
+          echo "==== 基础设施就位，验证核心源码物理路径 ===="
+          if [ -d "aosp-base/tools/aapt2" ]; then
+            echo "AAPT2 源码验证成功！"
+          else
+            echo "ERROR: 源码克隆异常！" && exit 1
+          fi
+
+      - name: 4. 下一步交叉编译占位与环境侦察
+        run: |
+          cd $GITHUB_WORKSPACE/aosp-base/tools/aapt2
+          echo "当前 NDK 编译器物理路径: $ANDROID_NDK_LATEST_HOME"
+          echo "准备就绪，等待交互方进行 NDK 工具链打靶..."
