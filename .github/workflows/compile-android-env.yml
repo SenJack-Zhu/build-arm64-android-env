@@ -15,17 +15,14 @@ jobs:
         uses: actions/checkout@v4
 
       # ==========================================
-      # 2. 直接安装 Ubuntu 自带的 Android 环境（100% 成功，绝不 404）
+      # 2. 按照日志提示的精确包名进行安装（绝不踩空）
       # ==========================================
       - name: Install Base and Android Tools from Ubuntu Mirror
         run: |
           sudo apt-get update
-          # 直接安装 Ubuntu 官方源里的全套 Android SDK 工具
-          sudo apt-get install -y xz-utils tar google-android-build-tools-installer google-android-platform-23-installer
+          # 直接锁死日志里明确存在的 30.0.3 编译器和平台版本
+          sudo apt-get install -y xz-utils tar google-android-build-tools-30.0.3-installer google-android-platform-23-installer
           
-          # Ubuntu 默认会把 jar 包和依赖放在标准的本地系统路径下
-          # 我们直接去系统路径捞货就行
-
       # ==========================================
       # 3. 完美的 Linux 原生解压你上传的 Arch 包
       # ==========================================
@@ -56,9 +53,6 @@ jobs:
           cp ${{ github.workspace }}/arch-extracted/usr/bin/zipalign $TARGET_DIR/bin/
           
           # 2. 从 Ubuntu 系统中直接捞出跨平台的 Java 核心组件（天生多架构通用）
-          # 寻找并搬运本地安装好的 android.jar 和核心工具包
-          SYS_SDK_DIR="/usr/lib/android-sdk"
-          
           # 自动寻找系统路径下的 d8.jar / r8.jar 以及 apksigner.jar
           find /usr/share/java/ /usr/lib/android-sdk/ -name "r8.jar" -o -name "d8.jar" -exec cp {} $TARGET_DIR/lib/d8.jar \;
           find /usr/share/java/ /usr/lib/android-sdk/ -name "apksigner.jar" -exec cp {} $TARGET_DIR/lib/apksigner.jar \;
