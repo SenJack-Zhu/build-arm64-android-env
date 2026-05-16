@@ -1,4 +1,4 @@
-name: 交叉编译 ARM64 原生 AAPT2 (正统闭环版)
+name: 交叉编译 ARM64 原生 AAPT2 (官方权限放行版)
 
 on:
   push:
@@ -10,34 +10,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. 物理检出当前仓库
+      - name: 1. 利用官方高权限管道【直接递归克隆】主库及全量 C++ 子模块
         uses: actions/checkout@v4
+        with:
+          # 直接指定要拉取的第三方开源骨架仓库，无视任何凭证死锁
+          repository: 'by-syk/aapt2-sdk'
+          # 核心铁律：强行开启官方递归子模块拉取，100% 避开 Shell 鉴权崩溃
+          submodules: 'recursive'
 
-      - name: 2. 拉取专门针对 aapt2 剥离的独立 CMake 编译骨架与全量 C++ 源码
+      - name: 2. 验证源码及 CMake 环境闭环状态
         run: |
-          cd $GITHUB_WORKSPACE
-          echo "==== 开始拉取全球开发者维护的 aapt2 独立编译骨架 ===="
-          # 克隆专门为独立编译 aapt2 剥离好全量依赖库（libbase/libutils/protobuf）的开源主库
-          git clone --recursive https://github.com/by-syk/aapt2-sdk.git aapt2-build-env
-          
-          # 进入工作区验证核心构建文件是否存在
-          cd aapt2-build-env
+          echo "==== 检查当前虚拟机工作区物理文件 ===="
+          pwd && ls -la
           if [ -f "CMakeLists.txt" ]; then
-            echo "独立 CMakeLists 验证成功，全套 C++ 源码及依赖已完整闭环！"
+            echo "🎉 核心编译骨架拉取成功！"
           else
-            echo "ERROR: 构建骨架拉取失败！" && exit 1
+            echo "ERROR: 未在根目录找到 CMakeLists.txt！" && exit 1
           fi
 
       - name: 3. 调动 NDK r28c 执行跨架构静态链接编译
         run: |
-          cd $GITHUB_WORKSPACE/aapt2-build-env
           echo "==== 开始构建本地编译沙盒 ===="
           mkdir build && cd build
           
           echo "==== 注入 NDK 交叉编译工具链并强制开轰 ===="
           # 1. 调动系统预装的 NDK 路径
           # 2. 强行指定目标架构为 ARM64 (aarch64-linux-android)
-          # 3. 强行开启全局静态链接 (-DSTATIC_LINK=ON)，确保编出来的二进制不依赖手机系统里任何残缺的 .so 库
+          # 3. 开启全局静态链接，确保产物彻底脱离外部 .so 依赖
           cmake .. \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
@@ -52,10 +51,10 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/out_bin
           if [ -f "aapt2" ]; then
             cp aapt2 $GITHUB_WORKSPACE/out_bin/
-            echo "🎉 恭喜老哥！正统原生 ARM64 aapt2 静态二进制编译成功！"
+          elif [ -f "bin/aapt2" ]; then
+            cp bin/aapt2 $GITHUB_WORKSPACE/out_bin/
           else
-            # 兼容某些剥离库编译出的产物在 bin 目录下
-            cp bin/aapt2 $GITHUB_WORKSPACE/out_bin/ || (echo "ERROR: 未在预期位置找到编译产物！" && exit 1)
+            echo "ERROR: 编译未成功产生 aapt2 二进制！" && exit 1
           fi
 
       - name: 4. 正式出货：将生成的 ARM64 静态包上载到 GitHub 网页端
