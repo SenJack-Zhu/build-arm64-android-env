@@ -28,38 +28,48 @@ jobs:
           git clone --branch android-14.0.0_r50 --depth=1 https://github.com/aosp-mirror/platform_frameworks_base.git aosp-base
           git clone --branch android-14.0.0_r50 --depth=1 https://github.com/aosp-mirror/platform_system_core.git aosp-core
 
-      - name: 4. 把仓库暴力掰开！地毯式搜捕头文件并开轰
+      - name: 4. 把仓库暴力掰开！第二波地毯式搜捕头文件并开轰
         run: |
           cd $GITHUB_WORKSPACE
           
-          echo "==== Step 4.1: 创建物理沙盒寻找腹地 ===="
+          echo "==== Step 4.1: 初始化并扩大物理沙盒寻找腹地 ===="
           mkdir -p fake-includes/androidfw
           
-          echo "==== Step 4.2: 暴力掰开仓库，全局通缉缺失的头文件 ===="
-          # 在你跑通的 base 库里全局死磕 ConfigDescription.h，抓到后直接拷进沙盒
+          echo "==== Step 4.2: 暴力掰开，加大力度通缉缺失的底层头文件 ===="
+          # 第一波抓捕的战果，继续保留
           find aosp-base/ -name "ConfigDescription.h" -exec cp {} fake-includes/androidfw/ \;
           find aosp-base/ -name "StringPiece.h" -exec cp {} fake-includes/androidfw/ \;
           find aosp-base/ -name "StringPool.h" -exec cp {} fake-includes/androidfw/ \;
           
-          echo "==== 【物理铁证】看看咱们从跑通的库里剥离出了什么： ===="
-          ls -l fake-includes/androidfw/
+          # 【第二波精准抓捕】把这次死卡的 ResourceTypes.h 以及它可能连带的内部骨肉全部挖出来
+          find aosp-base/ -name "ResourceTypes.h" -exec cp {} fake-includes/androidfw/ \;
+          find aosp-base/ -name "ResourceTypes.cpp" -exec cp {} fake-includes/androidfw/ \;
+          find aosp-base/ -name "AssetManager.h" -exec cp {} fake-includes/androidfw/ \;
+          
+          # 【物理破局】解决 BigBuffer.h 灯下黑问题：直接把 aapt2 自身的头文件物理软链接或拷贝一份进沙盒
+          cp aosp-base/tools/aapt2/*.h fake-includes/androidfw/ || true
+          
+          echo "==== 【物理铁证】看看咱们这次又刮出了多少硬货： ===="
+          ls -l fake-includes/androidfw/ | head -n 30
           
           echo "==== Step 4.3: 设置 NDK r28c 交叉编译器 ===="
           export NDK_PATH=$GITHUB_WORKSPACE/android-ndk-r28c
           export CXX=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang++
           
-          # 寻路对齐：把我们暴力提取出的 fake-includes 狠狠喂给编译器
+          # 交叉对齐包含路径：把 aapt2 本身、core、以及洗平依赖的 fake-includes 全部喂进去
           export INCLUDES="-I$GITHUB_WORKSPACE/aosp-base/tools/aapt2 \
                            -I$GITHUB_WORKSPACE/aosp-base/core/jni \
                            -I$GITHUB_WORKSPACE/aosp-core/libutils/include \
                            -I$GITHUB_WORKSPACE/aosp-core/libcutils/include \
                            -I$GITHUB_WORKSPACE/aosp-core/include \
-                           -I$GITHUB_WORKSPACE/fake-includes"
+                           -I$GITHUB_WORKSPACE/fake-includes \
+                           -I$GITHUB_WORKSPACE/fake-includes/androidfw"
           
           # 进入 aapt2 源码主战场
           cd aosp-base/tools/aapt2
           
-          echo "==== Step 4.4: 全量 C++ 开轰 ===="
+          echo "==== Step 4.4: 全量 C++ 暴力开轰 ===="
+          # 开启静态编译，强行重熔
           $CXX -std=c++17 -O3 $INCLUDES *.cpp -static-libstdc++ -o aapt2_arm64 || true
           
           echo "==== Step 4.5: 检查当前目录是否成功孵化出成品 ===="
@@ -68,7 +78,7 @@ jobs:
             echo "【大功告成】物理成品已诞生！"
             cp aapt2_arm64 $GITHUB_WORKSPACE/aapt2_linux_arm64_static
           else
-            echo "【卡点预警】观察这次暴力掰开仓库、就地取材后，缺少的下一个具体符号或头文件是什么..."
+            echo "【卡点预警】观察这次本地起底后，缺少的下一波具体报错..."
           fi
 
       - name: 5. 上传成品直链
