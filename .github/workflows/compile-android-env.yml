@@ -1,4 +1,4 @@
-name: 交叉编译 ARM64 原生 AAPT2 (纯净克隆版)
+name: 跨库围剿提取 ARM64 原生 AAPT2
 
 on:
   push:
@@ -6,37 +6,40 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-aapt2-static-arm64:
+  extract-aapt2:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. 物理检出你自己的仓库 (绝对绿灯)
+      - name: 1. 物理检出你自己的仓库
         uses: actions/checkout@v4
 
-      - name: 2. 纯明文命令行物理围剿 aapt2 编译骨架
+      - name: 2. 克隆他活着的 Apktool 仓库 (走标准明文 HTTPS 绝不卡死)
         run: |
           cd $GITHUB_WORKSPACE
-          echo "==== 开始绕过 API 限制，明文克隆编译主库 ===="
+          echo "==== 开始明文突袭 Apktool-android 仓库 ===="
+          git clone --depth=1 https://github.com/MuntashirAkon/Apktool-android.git apktool-env
           
-          # 仅克隆主库本体，绝不带 --recursive，彻底避开鉴权死锁与 API 404
-          git clone --depth=1 https://github.com/by-syk/aapt2-sdk.git aapt2-build-env
-          
-          cd aapt2-build-env
-          echo "==== 主库拉取成功，开始透视并手动补齐子模块 ===="
-          ls -la
-          
-          # 查看它到底用了哪些子模块，防止脑补地址
-          git config --file .gitmodules --get-regexp path || echo "未发现子模块配置"
+          cd apktool-env
+          echo "==== 仓库合围成功，开始全盘通缉 aapt2 原生二进制 ===="
+          # 全盘无死角搜索所有名为 aapt2 的物理文件
+          find . -name "*aapt2*"
 
-      - name: 3. 调动 NDK r28c 尝试初步配置测试
+      - name: 3. 精准剥离并洗劫 ARM64 静态目标
         run: |
-          if [ -d "$GITHUB_WORKSPACE/aapt2-build-env" ]; then
-            cd $GITHUB_WORKSPACE/aapt2-build-env
-            mkdir build && cd build
-            # 尝试跑一下 cmake，看它当前缺哪个子模块的 C++ 头文件，它缺啥我们等下补啥！
-            cmake .. \
-              -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
-              -DANDROID_ABI=arm64-v8a \
-              -DANDROID_PLATFORM=android-35 \
-              -DCMAKE_BUILD_TYPE=Release || echo "CMake 预扫描完毕，等待捕捉缺失依赖..."
-          fi
+          cd $GITHUB_WORKSPACE
+          mkdir -p out_bin
+          
+          echo "==== 开始跨目录物理抽取 ===="
+          # 根据该项目标准结构，其原生二进制存放在 app/src/main/assets/ 或相似的特定底层资源目录中
+          # 我们直接用 find 强行把所有匹配的文件全部物理复制到输出沙盒中
+          find apktool-env/ -type f -name "aapt2*" -exec cp {} out_bin/ \;
+          
+          echo "==== 检查截获的战果 ===="
+          ls -la out_bin/
+
+      - name: 4. 实体出货：将直接挖出来的 ARM64 纯血 binary 上载到网页端
+        uses: actions/upload-artifact@v4
+        with:
+          name: aapt2-arm64-looted-binary
+          path: ${{ github.workspace }}/out_bin/
+          retention-days: 5
