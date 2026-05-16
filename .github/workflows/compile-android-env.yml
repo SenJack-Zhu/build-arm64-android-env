@@ -1,0 +1,50 @@
+name: Compile Complete Android Build Environment for AARCH64
+
+on:
+  workflow_dispatch: # 随时在网页上肉眼手动点按钮触发熔炼
+
+jobs:
+  build-env:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install PC Build Essentials
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget unzip
+
+      - name: Checkout AOSP Tools Source (Clean & Modular)
+        uses: actions/checkout@v4
+        with:
+          repository: 'JonForShort/android-tools' # 包含了 aapt, aapt2, aidl, zipalign 等全套工具的 CMake 源码
+          submodules: 'recursive'
+
+      - name: Cross-Compile All Tools to Linux-AARCH64
+        run: |
+          mkdir build && cd build
+          
+          # 【降维打击】这里不使用 Android NDK（因为 NDK 编出来的是跑在 Android App 里的 Bionic 库）
+          # 我们直接使用 GNU 交叉编译器，把目标死死锁定制在跑在手机 PRoot Arch Linux 里的 Glibc 架构上！
+          cmake .. \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DCMAKE_BUILD_TYPE=Release \
+            -G Ninja
+          
+          # 一口气把全套核心构建工具全部在云端物理融化、重组
+          ninja aapt aapt2 aidl zipalign
+
+      - name: Package the Complete Environment Binaries
+        run: |
+          mkdir -p android-env-aarch64
+          # 把刚出炉的、纯正手机 Linux-arm64 原生能跑的全套工具链抄出来
+          cp build/aapt build/aapt2 build/aidl build/zipalign ./android-env-aarch64/
+          tar -czvf android-env-aarch64.tar.gz android-env-aarch64
+
+      - name: Upload Complete Android Environment
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-core-tools-aarch64
+          path: android-env-aarch64.tar.gz
