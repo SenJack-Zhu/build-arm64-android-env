@@ -1,4 +1,4 @@
-name: Extract Pure Android Environment for PRoot Arch Linux
+name: Pure Extract Android Environment for PRoot Arch Linux
 
 on:
   workflow_dispatch:
@@ -11,33 +11,23 @@ jobs:
       - name: Install Extraction Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget zstd tar unzip curl
+          sudo apt-get install -y wget xz-utils tar unzip
 
       # ==========================================
-      # 1. 动态抓取 Arch Linux ARM 官方源的真实包名并下载
+      # 1. 物理锁死你确认的真实 Arch Linux ARM 直链
       # ==========================================
       - name: Download and Extract Arch Linux ARM Native Binaries
         run: |
           mkdir -p ${{ github.workspace }}/arch-extracted
           
-          # 1. 动态嗅探当前最新包名，防止硬编码版本号因滚动更新而 404
-          echo "Scanning Arch Linux ARM repo for the latest android-tools..."
-          PKG_NAME=$(curl -s https://mirror.archlinuxarm.org/aarch64/extra/ | grep -o 'android-tools-[^"]*\.pkg\.tar\.zst' | head -n 1)
+          # 完全锁死你确认的 35.0.2-25 tar.xz 版本
+          TARGET_URL="https://mirror.archlinuxarm.org/aarch64/extra/android-tools-35.0.2-25-aarch64.pkg.tar.xz"
           
-          if [ -z "$PKG_NAME" ]; then
-            echo "错误：未能从官方源解析到 android-tools 的最新包名！"
-            exit 1
-          fi
-          
-          echo "Found latest package: $PKG_NAME"
-          REAL_URL="https://mirror.archlinuxarm.org/aarch64/extra/$PKG_NAME"
-          
-          # 2. 安全下载
-          wget -q --show-progress "$REAL_URL" -O android-tools.pkg.tar.zst
+          echo "Downloading from your verified URL: $TARGET_URL"
+          wget --connect-timeout=15 --tries=3 -q --show-progress "$TARGET_URL" -O android-tools.pkg.tar.xz
 
-          # 3. 使用 zstd 解压
-          zstd -d android-tools.pkg.tar.zst -o android-tools.tar
-          tar -xf android-tools.tar -C ${{ github.workspace }}/arch-extracted
+          # 使用 xz 和 tar 解压标准的 Arch xz 压缩包
+          tar -xJf android-tools.pkg.tar.xz -C ${{ github.workspace }}/arch-extracted
 
       # ==========================================
       # 2. 提取 Android SDK 核心 Java 组件 (跨平台通用)
@@ -67,33 +57,32 @@ jobs:
           mkdir -p $TARGET_DIR/bin
           mkdir -p $TARGET_DIR/lib
           
-          # 1. 搬运从 Arch Linux ARM 官方包里提取出的纯正 AARCH64 二进制文件
-          # 动态链接 100% 契合你 PRoot 内部的环境
+          # 搬运从 Arch Linux ARM 官方包里提取出的纯正 AARCH64 二进制文件
           cp ${{ github.workspace }}/arch-extracted/usr/bin/aapt $TARGET_DIR/bin/
           cp ${{ github.workspace }}/arch-extracted/usr/bin/aapt2 $TARGET_DIR/bin/
           cp ${{ github.workspace }}/arch-extracted/usr/bin/zipalign $TARGET_DIR/bin/
           
-          # 2. 搬运跨平台的 jar 包和平台声明文件
+          # 搬运跨平台的 jar 包和平台声明文件
           cp ${{ github.workspace }}/out-env/android-sdk/android.jar $TARGET_DIR/lib/
           cp ${{ github.workspace }}/out-env/android-sdk/framework.aidl $TARGET_DIR/lib/
           cp ${{ github.workspace }}/out-env/android-sdk/lib/d8.jar $TARGET_DIR/lib/
           cp ${{ github.workspace }}/out-env/android-sdk/lib/apksigner.jar $TARGET_DIR/lib/
 
-          # 3. 编写标准 Linux 专用的 D8 快捷脚本
+          # 编写标准 Linux 专用的 D8 快捷脚本
           cat << 'EOF' > $TARGET_DIR/bin/d8
           #!/bin/sh
           exec java -cp "$ANDROID_HOME/lib/d8.jar" com.android.tools.r8.D8 "$@"
           EOF
           chmod +x $TARGET_DIR/bin/d8
 
-          # 4. 编写标准 Linux 专用的 apksigner 快捷脚本
+          # 编写标准 Linux 专用的 apksigner 快捷脚本
           cat << 'EOF' > $TARGET_DIR/bin/apksigner
           #!/bin/sh
           exec java -jar "$ANDROID_HOME/lib/apksigner.jar" "$@"
           EOF
           chmod +x $TARGET_DIR/bin/apksigner
 
-          # 5. 最终归档
+          # 最终归档
           cd $TARGET_DIR
           tar -czvf ../android-proot-env-aarch64.tar.gz .
 
