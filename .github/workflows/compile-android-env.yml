@@ -1,4 +1,4 @@
-name: 交叉编译 ARM64 原生 AAPT2 (官方权限放行版)
+name: 交叉编译 ARM64 原生 AAPT2 (纯净克隆版)
 
 on:
   push:
@@ -10,56 +10,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. 利用官方高权限管道【直接递归克隆】主库及全量 C++ 子模块
+      - name: 1. 物理检出你自己的仓库 (绝对绿灯)
         uses: actions/checkout@v4
-        with:
-          # 直接指定要拉取的第三方开源骨架仓库，无视任何凭证死锁
-          repository: 'by-syk/aapt2-sdk'
-          # 核心铁律：强行开启官方递归子模块拉取，100% 避开 Shell 鉴权崩溃
-          submodules: 'recursive'
 
-      - name: 2. 验证源码及 CMake 环境闭环状态
+      - name: 2. 纯明文命令行物理围剿 aapt2 编译骨架
         run: |
-          echo "==== 检查当前虚拟机工作区物理文件 ===="
-          pwd && ls -la
-          if [ -f "CMakeLists.txt" ]; then
-            echo "🎉 核心编译骨架拉取成功！"
-          else
-            echo "ERROR: 未在根目录找到 CMakeLists.txt！" && exit 1
-          fi
+          cd $GITHUB_WORKSPACE
+          echo "==== 开始绕过 API 限制，明文克隆编译主库 ===="
+          
+          # 仅克隆主库本体，绝不带 --recursive，彻底避开鉴权死锁与 API 404
+          git clone --depth=1 https://github.com/by-syk/aapt2-sdk.git aapt2-build-env
+          
+          cd aapt2-build-env
+          echo "==== 主库拉取成功，开始透视并手动补齐子模块 ===="
+          ls -la
+          
+          # 查看它到底用了哪些子模块，防止脑补地址
+          git config --file .gitmodules --get-regexp path || echo "未发现子模块配置"
 
-      - name: 3. 调动 NDK r28c 执行跨架构静态链接编译
+      - name: 3. 调动 NDK r28c 尝试初步配置测试
         run: |
-          echo "==== 开始构建本地编译沙盒 ===="
-          mkdir build && cd build
-          
-          echo "==== 注入 NDK 交叉编译工具链并强制开轰 ===="
-          # 1. 调动系统预装的 NDK 路径
-          # 2. 强行指定目标架构为 ARM64 (aarch64-linux-android)
-          # 3. 开启全局静态链接，确保产物彻底脱离外部 .so 依赖
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-35 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSTATIC_LINK=ON
-          
-          echo "==== 多核并发全量编译 ===="
-          make -j$(nproc)
-          
-          echo "==== 收集出货目标 ===="
-          mkdir -p $GITHUB_WORKSPACE/out_bin
-          if [ -f "aapt2" ]; then
-            cp aapt2 $GITHUB_WORKSPACE/out_bin/
-          elif [ -f "bin/aapt2" ]; then
-            cp bin/aapt2 $GITHUB_WORKSPACE/out_bin/
-          else
-            echo "ERROR: 编译未成功产生 aapt2 二进制！" && exit 1
+          if [ -d "$GITHUB_WORKSPACE/aapt2-build-env" ]; then
+            cd $GITHUB_WORKSPACE/aapt2-build-env
+            mkdir build && cd build
+            # 尝试跑一下 cmake，看它当前缺哪个子模块的 C++ 头文件，它缺啥我们等下补啥！
+            cmake .. \
+              -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+              -DANDROID_ABI=arm64-v8a \
+              -DANDROID_PLATFORM=android-35 \
+              -DCMAKE_BUILD_TYPE=Release || echo "CMake 预扫描完毕，等待捕捉缺失依赖..."
           fi
-
-      - name: 4. 正式出货：将生成的 ARM64 静态包上载到 GitHub 网页端
-        uses: actions/upload-artifact@v4
-        with:
-          name: aapt2-linux-arm64-static
-          path: ${{ github.workspace }}/out_bin/aapt2
-          retention-days: 5
