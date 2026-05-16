@@ -1,18 +1,21 @@
-name: Compile Complete Android Build Environment for AARCH64
+name: Compile Dedicated Android Environment for PRoot Arch Linux
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-env:
+  build-proot-env:
     runs-on: ubuntu-latest
 
     steps:
       - name: Install PC Build Essentials
         run: |
           sudo apt-get update
-          sudo apt-get install -y git build-essential cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget unzip
+          sudo apt-get install -y git build-essential cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget unzip curl
 
+      # ==========================================
+      # 1. 动态链接交叉编译 (AAPT, AAPT2, AIDL, ZIPALIGN)
+      # ==========================================
       - name: Checkout AOSP Tools Source
         uses: actions/checkout@v4
         with:
@@ -20,13 +23,10 @@ jobs:
           submodules: 'recursive'
           path: 'android-tools-source'
 
-      - name: Cross-Compile All Tools to Linux-AARCH64
-        # 强制在这个绝对路径下当阵地
+      - name: Cross-Compile Native Tools for glibc AARCH64
         working-directory: ${{ github.workspace }}/android-tools-source
         run: |
-          # 彻底废除 cd 命令！直接用 cmake 的 -B (Build输出路径) 和 -S (Source源码路径) 物理锁死！
-          # -S . 代表源码就在当前 working-directory
-          # -B build_out 代表编译生成的中间件全部丢进当前目录下的 build_out
+          # 纯正的动态链接编译，完全信任 PRoot 内部的 glibc 环境
           cmake -S . -B build_out \
             -DCMAKE_SYSTEM_NAME=Linux \
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
@@ -35,19 +35,69 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -G Ninja
           
-          # 物理指定在编译输出目录下开轰
           ninja -C build_out aapt aapt2 aidl zipalign
 
-      - name: Package the Complete Environment Binaries
-        working-directory: ${{ github.workspace }}/android-tools-source
+      # ==========================================
+      # 2. 提取 Android SDK 核心 Java 组件 (D8/R8, android.jar)
+      # ==========================================
+      - name: Extract Android SDK Java Components
         run: |
-          mkdir -p android-env-aarch64
-          # 路径完全透明，直接去 build_out 捞货
-          cp build_out/aapt build_out/aapt2 build_out/aidl build_out/zipalign ./android-env-aarch64/
-          tar -czvf ../android-env-aarch64.tar.gz android-env-aarch64
+          mkdir -p ${{ github.workspace }}/out-env/android-sdk/lib
+          
+          # 抓取最新的 Android 34 核心库
+          wget -q https://dl.google.com/android/repository/platform-34_r03.zip -O android-platforms.zip
+          unzip -q android-platforms.zip -d platforms-extracted
+          cp platforms-extracted/android-34/android.jar ${{ github.workspace }}/out-env/android-sdk/
+          cp platforms-extracted/android-34/framework.aidl ${{ github.workspace }}/out-env/android-sdk/
+          
+          # 抓取 D8 和 APKsigner
+          wget -q https://dl.google.com/android/repository/build-tools_r34.0.0-linux.zip -O build-tools.zip
+          unzip -q build-tools.zip -d build-tools-extracted
+          cp build-tools-extracted/android-34.0.0/lib/d8.jar ${{ github.workspace }}/out-env/android-sdk/lib/
+          cp build-tools-extracted/android-34.0.0/lib/apksigner.jar ${{ github.workspace }}/out-env/android-sdk/lib/
 
-      - name: Upload Complete Android Environment
+      # ==========================================
+      # 3. 组装与打包交付
+      # ==========================================
+      - name: Assemble Final Package
+        run: |
+          TARGET_DIR="${{ github.workspace }}/android-proot-env"
+          mkdir -p $TARGET_DIR/bin
+          mkdir -p $TARGET_DIR/lib
+          
+          # 1. 搬运与 PRoot 环境 glibc 完美契合的二进制工具
+          cp ${{ github.workspace }}/android-tools-source/build_out/aapt \
+             ${{ github.workspace }}/android-tools-source/build_out/aapt2 \
+             ${{ github.workspace }}/android-tools-source/build_out/aidl \
+             ${{ github.workspace }}/android-tools-source/build_out/zipalign \
+             $TARGET_DIR/bin/
+          
+          # 2. 搬运跨平台的 jar 包和平台声明文件
+          cp ${{ github.workspace }}/out-env/android-sdk/android.jar $TARGET_DIR/lib/
+          cp ${{ github.workspace }}/out-env/android-sdk/framework.aidl $TARGET_DIR/lib/
+          cp ${{ github.workspace }}/out-env/android-sdk/lib/d8.jar $TARGET_DIR/lib/
+          cp ${{ github.workspace }}/out-env/android-sdk/lib/apksigner.jar $TARGET_DIR/lib/
+
+          # 3. 编写标准 Linux 专用的 D8 快捷脚本
+          cat << 'EOF' > $TARGET_DIR/bin/d8
+          #!/bin/sh
+          exec java -cp "$ANDROID_HOME/lib/d8.jar" com.android.tools.r8.D8 "$@"
+          EOF
+          chmod +x $TARGET_DIR/bin/d8
+
+          # 4. 编写标准 Linux 专用的 apksigner 快捷脚本
+          cat << 'EOF' > $TARGET_DIR/bin/apksigner
+          #!/bin/sh
+          exec java -jar "$ANDROID_HOME/lib/apksigner.jar" "$@"
+          EOF
+          chmod +x $TARGET_DIR/bin/apksigner
+
+          # 5. 归档
+          cd $TARGET_DIR
+          tar -czvf ../android-proot-env-aarch64.tar.gz .
+
+      - name: Upload Package
         uses: actions/upload-artifact@v4
         with:
-          name: android-core-tools-aarch64
-          path: ${{ github.workspace }}/android-env-aarch64.tar.gz
+          name: android-proot-env-aarch64
+          path: ${{ github.workspace }}/android-proot-env-aarch64.tar.gz
