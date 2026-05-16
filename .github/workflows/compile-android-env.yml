@@ -1,7 +1,7 @@
 name: Compile Complete Android Build Environment for AARCH64
 
 on:
-  workflow_dispatch: # 随时在网页上肉眼手动点按钮触发熔炼
+  workflow_dispatch: # 支持手动点按钮一键开熔
 
 jobs:
   build-env:
@@ -13,18 +13,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git build-essential cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget unzip
 
-      - name: Checkout AOSP Tools Source (Clean & Modular)
+      - name: Checkout AOSP Tools Source
         uses: actions/checkout@v4
         with:
-          repository: 'JonForShort/android-tools' # 包含了 aapt, aapt2, aidl, zipalign 等全套工具的 CMake 源码
+          repository: 'JonForShort/android-tools' # 白嫖社区提炼好的 AOSP 工具集源码
           submodules: 'recursive'
+          path: 'android-tools-source' # 显式指定克隆到一个固定命名的子文件夹里，绝不跟根目录混淆
 
       - name: Cross-Compile All Tools to Linux-AARCH64
+        # 物理焊死：强制让以下所有编译命令都在刚刚克隆下来的源码根目录下执行
+        working-directory: ${{ github.workspace }}/android-tools-source
         run: |
-          mkdir build && cd build
+          # 1. 安全创建独立的编译坑位
+          mkdir -p build_aarch64 && cd build_aarch64
           
-          # 【降维打击】这里不使用 Android NDK（因为 NDK 编出来的是跑在 Android App 里的 Bionic 库）
-          # 我们直接使用 GNU 交叉编译器，把目标死死锁定制在跑在手机 PRoot Arch Linux 里的 Glibc 架构上！
+          # 2. 强行指定当前目录下的上一级（即源码根目录）进行交叉编译配置
           cmake .. \
             -DCMAKE_SYSTEM_NAME=Linux \
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
@@ -33,18 +36,19 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -G Ninja
           
-          # 一口气把全套核心构建工具全部在云端物理融化、重组
+          # 3. 物理开轰
           ninja aapt aapt2 aidl zipalign
 
       - name: Package the Complete Environment Binaries
+        working-directory: ${{ github.workspace }}/android-tools-source
         run: |
           mkdir -p android-env-aarch64
-          # 把刚出炉的、纯正手机 Linux-arm64 原生能跑的全套工具链抄出来
-          cp build/aapt build/aapt2 build/aidl build/zipalign ./android-env-aarch64/
-          tar -czvf android-env-aarch64.tar.gz android-env-aarch64
+          # 把刚刚在 build_aarch64 里热乎出炉的物理真神全部捞出来打包
+          cp build_aarch64/aapt build_aarch64/aapt2 build_aarch64/aidl build_aarch64/zipalign ./android-env-aarch64/
+          tar -czvf ../android-env-aarch64.tar.gz android-env-aarch64
 
       - name: Upload Complete Android Environment
         uses: actions/upload-artifact@v4
         with:
           name: android-core-tools-aarch64
-          path: android-env-aarch64.tar.gz
+          path: ${{ github.workspace }}/android-env-aarch64.tar.gz
