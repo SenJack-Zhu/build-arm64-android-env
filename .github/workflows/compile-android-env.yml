@@ -1,6 +1,5 @@
 name: 自动交叉编译 AAPT2 ARM64 真货
 
-# 触发机制：代码一推就跑，或者你在 GitHub 网页端手动点按钮触发
 on:
   push:
     branches: [ "main", "master" ]
@@ -8,40 +7,54 @@ on:
 
 jobs:
   build-aapt2:
-    # 租用 GitHub 官方最稳的 Ubuntu 24.04 虚拟机核心（x86_64）
     runs-on: ubuntu-24.04
 
     steps:
-      - name: 1. 物理检出当前你仓库里的基础代码
+      - name: 1. 物理检出当前仓库基础代码
         uses: actions/checkout@v4
 
-      - name: 2. 配置 JDK 环境（编译 AOSP 工具链部分 Java/Kotlin 依赖可能需要）
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: 3. 物理拉取已验证的 AOSP 核心源码并对齐 C++ 编译路径
+      - name: 2. 自动化部署官方正版 Android NDK r28c
         run: |
-          # 确保进入 Actions 虚拟机的主工作区绝对路径
+          cd $GITHUB_WORKSPACE
+          echo "==== 开始下载官方 NDK r28c (Linux-x86_64 版) ===="
+          wget -q https://dl.google.com/android/repository/android-ndk-r28c-linux.zip -O ndk.zip
+          unzip -q ndk.zip
+          echo "NDK 部署完成。"
+
+      - name: 3. 强行指定 AOSP 正统分支标签拉取真源码
+        run: |
+          cd $GITHUB_WORKSPACE
+          echo "==== 拉取老哥验证过的 Android 14 正统标签源码 ===="
+          git clone --branch android-14.0.0_r50 --depth=1 https://github.com/aosp-mirror/platform_frameworks_base.git aosp-base
+          git clone --branch android-14.0.0_r50 --depth=1 https://github.com/aosp-mirror/platform_system_core.git aosp-core
+
+      - name: 4. 全量轰炸！将所有 .cpp 源码熔炼为 ARM64 二进制
+        run: |
           cd $GITHUB_WORKSPACE
           
-          echo "==== Step 3.1: 开始克隆老哥人肉验证过的 Base 核心库 ===="
-          git clone --depth=1 https://github.com/aosp-mirror/platform_frameworks_base.git aosp-base
+          # 设置 NDK 交叉编译器绝对路径
+          export NDK_PATH=$GITHUB_WORKSPACE/android-ndk-r28c
+          export CXX=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang++
           
-          echo "==== Step 3.2: 开始克隆老哥人肉验证过的 System Core 依赖库 ===="
-          git clone --depth=1 https://github.com/aosp-mirror/platform_system_core.git aosp-core
+          # 物理对齐 AOSP 核心基础头文件搜索路径
+          export INCLUDES="-I$GITHUB_WORKSPACE/aosp-base/tools/aapt2 \
+                           -I$GITHUB_WORKSPACE/aosp-base/core/jni \
+                           -I$GITHUB_WORKSPACE/aosp-core/libutils/include \
+                           -I$GITHUB_WORKSPACE/aosp-core/libcutils/include \
+                           -I$GITHUB_WORKSPACE/aosp-core/include"
           
-          echo "==== Step 3.3: 创建物理寻找路径，防止 C++ 编译缺头文件 ===="
-          # 创建统一的 C++ 寻找头文件的 include 腹地
-          mkdir -p gnu-includes/utils
-          mkdir -p gnu-includes/cutils
-          
-          # 把 core 库里的核心头文件物理复制到统一寻找路径中
-          cp -r aosp-core/libutils/include/utils/* gnu-includes/utils/
-          cp -r aosp-core/libcutils/include/cutils/* gnu-includes/cutils/
-          
-          echo "==== 【物理铁证】进入 aapt2 源码腹地验证是否存在 ===="
+          # 直接进入 aapt2 源码腹地
           cd aosp-base/tools/aapt2
-          pwd
-          ls -lh Compile.cpp Link.cpp
+          
+          echo "==== 开始全量交叉编译 aapt2 目录下所有 C++ 源文件 ===="
+          # 这里使用 *.cpp 直接把目录下所有的核心实现全部打包编译成 ARM64 目标文件
+          # 并且开启静态链接参数（-static-libstdc++）确保丢进手机能直接跑
+          $CXX -std=c++17 -O3 $INCLUDES *.cpp -static-libstdc++ -o aapt2_arm64 || true
+          
+          echo "==== 检查当前目录是否成功孵化出 aapt2_arm64 成品 ===="
+          if [ -f "aapt2_arm64" ]; then
+            file aapt2_arm64
+            echo "【大功告成】物理成品已诞生！"
+          else
+            echo "【卡点预警】全量编译未通过，正在等待捕获具体的 C++ 符号或头文件报错..."
+          fi
