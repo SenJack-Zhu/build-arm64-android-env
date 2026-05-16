@@ -1,4 +1,4 @@
-name: Pure Extract Android Environment for PRoot Arch Linux
+name: Pure Extract Android Environment from Self Repository
 
 on:
   workflow_dispatch:
@@ -8,29 +8,38 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ==========================================
+      # 1. 检出当前仓库（自动把你在本地传上去的 tar.xz 拉到容器里）
+      # ==========================================
+      - name: Checkout Current Repository
+        uses: actions/checkout@v4
+
       - name: Install Extraction Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget xz-utils tar unzip
+          sudo apt-get install -y xz-utils tar unzip wget
 
       # ==========================================
-      # 1. 物理锁死你确认的真实 Arch Linux ARM 直链
+      # 2. 直接从仓库本地目录解压 Arch Linux ARM 二进制
       # ==========================================
-      - name: Download and Extract Arch Linux ARM Native Binaries
+      - name: Extract Local Arch Linux ARM Binaries
         run: |
           mkdir -p ${{ github.workspace }}/arch-extracted
           
-          # 完全锁死你确认的 35.0.2-25 tar.xz 版本
-          TARGET_URL="https://mirror.archlinuxarm.org/aarch64/extra/android-tools-35.0.2-25-aarch64.pkg.tar.xz"
+          # 物理锁定路径指向你上传到仓库 libs 目录下的压缩包
+          LOCAL_PKG="${{ github.workspace }}/libs/android-tools-35.0.2-25-aarch64.pkg.tar.xz"
           
-          echo "Downloading from your verified URL: $TARGET_URL"
-          wget --connect-timeout=15 --tries=3 -q --show-progress "$TARGET_URL" -O android-tools.pkg.tar.xz
-
-          # 使用 xz 和 tar 解压标准的 Arch xz 压缩包
-          tar -xJf android-tools.pkg.tar.xz -C ${{ github.workspace }}/arch-extracted
+          if [ ! -f "$LOCAL_PKG" ]; then
+            echo "错误：未能检查到本地包，请确认你是否将包放入了仓库的 libs/ 目录下！"
+            exit 1
+          fi
+          
+          echo "Processing local package from repository: $LOCAL_PKG"
+          # 直接解压本地文件
+          tar -xJf "$LOCAL_PKG" -C ${{ github.workspace }}/arch-extracted
 
       # ==========================================
-      # 2. 提取 Android SDK 核心 Java 组件 (跨平台通用)
+      # 3. 提取 Android SDK 核心 Java 组件 (跨平台通用)
       # ==========================================
       - name: Extract Android SDK Java Components
         run: |
@@ -49,7 +58,7 @@ jobs:
           cp build-tools-extracted/android-34.0.0/lib/apksigner.jar ${{ github.workspace }}/out-env/android-sdk/lib/
 
       # ==========================================
-      # 3. 精准组装与打包交付
+      # 4. 精准组装与打包交付
       # ==========================================
       - name: Assemble Final Package
         run: |
