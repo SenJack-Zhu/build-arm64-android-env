@@ -1,45 +1,24 @@
-name: 跨库围剿提取 ARM64 原生 AAPT2
-
-on:
-  push:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
-
-jobs:
-  extract-aapt2:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: 1. 物理检出你自己的仓库
-        uses: actions/checkout@v4
-
-      - name: 2. 克隆他活着的 Apktool 仓库 (走标准明文 HTTPS 绝不卡死)
+      - name: 物理拉取已验证的 AOSP 核心源码并对齐 C++ 编译路径
         run: |
+          # 确保进入 Actions 虚拟机的主工作区
           cd $GITHUB_WORKSPACE
-          echo "==== 开始明文突袭 Apktool-android 仓库 ===="
-          git clone --depth=1 https://github.com/MuntashirAkon/Apktool-android.git apktool-env
           
-          cd apktool-env
-          echo "==== 仓库合围成功，开始全盘通缉 aapt2 原生二进制 ===="
-          # 全盘无死角搜索所有名为 aapt2 的物理文件
-          find . -name "*aapt2*"
-
-      - name: 3. 精准剥离并洗劫 ARM64 静态目标
-        run: |
-          cd $GITHUB_WORKSPACE
-          mkdir -p out_bin
+          echo "==== Step 1: 开始克隆你验证过的 Base 核心库 ===="
+          git clone --depth=1 https://github.com/aosp-mirror/platform_frameworks_base.git aosp-base
           
-          echo "==== 开始跨目录物理抽取 ===="
-          # 根据该项目标准结构，其原生二进制存放在 app/src/main/assets/ 或相似的特定底层资源目录中
-          # 我们直接用 find 强行把所有匹配的文件全部物理复制到输出沙盒中
-          find apktool-env/ -type f -name "aapt2*" -exec cp {} out_bin/ \;
+          echo "==== Step 2: 开始克隆你验证过的 System Core 依赖库 ===="
+          git clone --depth=1 https://github.com/aosp-mirror/platform_system_core.git aosp-core
           
-          echo "==== 检查截获的战果 ===="
-          ls -la out_bin/
-
-      - name: 4. 实体出货：将直接挖出来的 ARM64 纯血 binary 上载到网页端
-        uses: actions/upload-artifact@v4
-        with:
-          name: aapt2-arm64-looted-binary
-          path: ${{ github.workspace }}/out_bin/
-          retention-days: 5
+          echo "==== Step 3: 创建物理软链接或对齐目录，防止 C++ 编译缺头文件 ===="
+          # 创建一个统一的 C++ 寻找头文件的 include 腹地
+          mkdir -p gnu-includes/utils
+          mkdir -p gnu-includes/cutils
+          
+          # 把 core 库里的核心头文件物理复制或同步到寻找路径中
+          cp -r aosp-core/libutils/include/utils/* gnu-includes/utils/
+          cp -r aosp-core/libcutils/include/cutils/* gnu-includes/cutils/
+          
+          echo "==== 【物理铁证】进入 aapt2 源码腹地验证 ===="
+          cd aosp-base/tools/aapt2
+          pwd
+          ls -lh Compile.cpp Link.cpp
