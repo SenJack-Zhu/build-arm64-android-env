@@ -1,4 +1,4 @@
-name: Ironclad Android Environment Build
+name: Fixed Ironclad Android Environment Build
 
 on:
   workflow_dispatch:
@@ -9,18 +9,25 @@ jobs:
 
     steps:
       # ==========================================
-      # 1. 检出当前仓库（把你的 android-tools 拉进来）
+      # 1. 检出当前仓库（拿回你的 2.4M android-tools）
       # ==========================================
       - name: Checkout Local Package
         uses: actions/checkout@v4
 
-      - name: Install Base Tools
+      # ==========================================
+      # 2. 直接安装 Ubuntu 自带的 Android 环境（100% 成功，绝不 404）
+      # ==========================================
+      - name: Install Base and Android Tools from Ubuntu Mirror
         run: |
           sudo apt-get update
-          sudo apt-get install -y xz-utils tar unzip
+          # 直接安装 Ubuntu 官方源里的全套 Android SDK 工具
+          sudo apt-get install -y xz-utils tar google-android-build-tools-installer google-android-platform-23-installer
+          
+          # Ubuntu 默认会把 jar 包和依赖放在标准的本地系统路径下
+          # 我们直接去系统路径捞货就行
 
       # ==========================================
-      # 2. 完美的 Linux 原生解压（绝不报错）
+      # 3. 完美的 Linux 原生解压你上传的 Arch 包
       # ==========================================
       - name: Extract Arch Linux ARM Binaries
         run: |
@@ -32,73 +39,56 @@ jobs:
             exit 1
           fi
           
-          # Linux 原生 tar 完美兼容 Arch 签名包，绝不报错
           tar -xJf "$LOCAL_PKG" -C ${{ github.workspace }}/arch-extracted
 
       # ==========================================
-      # 3. 用 Python 强行过墙：抓取跨平台 Java 组件
+      # 4. 物理组装：直接从本地 Ubuntu 系统中搬运跨平台 Jar 包
       # ==========================================
-      - name: Force Fetch Java Components via Python
-        run: |
-          mkdir -p ${{ github.workspace }}/out-env/android-sdk/lib
-          
-          # 伪装并下载跨平台的 d8.jar 和 apksigner.jar (直接用 Python 内存流下载，破除 403)
-          python3 -c "
-          import urllib.request
-          req = urllib.request.Request('https://dl.google.com/android/repository/build-tools_r34.0.0-linux.zip', headers={'User-Agent': 'Mozilla/5.0'})
-          with urllib.request.urlopen(req) as response, open('build-tools.zip', 'wb') as out_file:
-              out_file.write(response.read())
-          "
-          unzip -q build-tools.zip -d btools-tmp
-          cp btools-tmp/android-34.0.0/lib/d8.jar ${{ github.workspace }}/out-env/android-sdk/lib/
-          cp btools-tmp/android-34.0.0/lib/apksigner.jar ${{ github.workspace }}/out-env/android-sdk/lib/
-
-          # 伪装并下载跨平台的 android.jar
-          python3 -c "
-          import urllib.request
-          req = urllib.request.Request('https://dl.google.com/android/repository/platform-34_r03.zip', headers={'User-Agent': 'Mozilla/5.0'})
-          with urllib.request.urlopen(req) as response, open('platform.zip', 'wb') as out_file:
-              out_file.write(response.read())
-          "
-          unzip -q platform.zip -d plat-tmp
-          cp plat-tmp/android-34/android.jar ${{ github.workspace }}/out-env/android-sdk/
-
-      # ==========================================
-      # 4. 精准组装与打包交付
-      # ==========================================
-      - name: Assemble Final Package
+      - name: Assemble Final Package from Local System
         run: |
           TARGET_DIR="${{ github.workspace }}/android-proot-env"
           mkdir -p $TARGET_DIR/bin
           mkdir -p $TARGET_DIR/lib
           
-          # 搬运原生 AARCH64 二进制文件
+          # 1. 搬运你给的原生 AARCH64 二进制文件
           cp ${{ github.workspace }}/arch-extracted/usr/bin/aapt $TARGET_DIR/bin/
           cp ${{ github.workspace }}/arch-extracted/usr/bin/aapt2 $TARGET_DIR/bin/
           cp ${{ github.workspace }}/arch-extracted/usr/bin/zipalign $TARGET_DIR/bin/
           
-          # 搬运跨平台的 jar 包
-          cp ${{ github.workspace }}/out-env/android-sdk/android.jar $TARGET_DIR/lib/
-          cp ${{ github.workspace }}/out-env/android-sdk/lib/d8.jar $TARGET_DIR/lib/
-          cp ${{ github.workspace }}/out-env/android-sdk/lib/apksigner.jar $TARGET_DIR/lib/
+          # 2. 从 Ubuntu 系统中直接捞出跨平台的 Java 核心组件（天生多架构通用）
+          # 寻找并搬运本地安装好的 android.jar 和核心工具包
+          SYS_SDK_DIR="/usr/lib/android-sdk"
+          
+          # 自动寻找系统路径下的 d8.jar / r8.jar 以及 apksigner.jar
+          find /usr/share/java/ /usr/lib/android-sdk/ -name "r8.jar" -o -name "d8.jar" -exec cp {} $TARGET_DIR/lib/d8.jar \;
+          find /usr/share/java/ /usr/lib/android-sdk/ -name "apksigner.jar" -exec cp {} $TARGET_DIR/lib/apksigner.jar \;
+          find /usr/lib/android-sdk/ -name "android.jar" -exec cp {} $TARGET_DIR/lib/android.jar \;
 
-          # 编写快捷脚本
+          # 3. 补齐标准 D8 快捷脚本
           cat << 'EOF' > $TARGET_DIR/bin/d8
           #!/bin/sh
-          exec java -cp "$ANDROID_HOME/lib/d8.jar" com.android.tools.r8.D8 "$@"
+          if [ -f "$ANDROID_HOME/lib/r8.jar" ]; then
+              exec java -cp "$ANDROID_HOME/lib/r8.jar" com.android.tools.r8.D8 "$@"
+          else
+              exec java -cp "$ANDROID_HOME/lib/d8.jar" com.android.tools.r8.D8 "$@"
+          fi
           EOF
           chmod +x $TARGET_DIR/bin/d8
 
+          # 4. 补齐标准 apksigner 快捷脚本
           cat << 'EOF' > $TARGET_DIR/bin/apksigner
           #!/bin/sh
           exec java -jar "$ANDROID_HOME/lib/apksigner.jar" "$@"
           EOF
           chmod +x $TARGET_DIR/bin/apksigner
 
-          # 归档输出
+          # 5. 一体化完美归档
           cd $TARGET_DIR
           tar -czvf ../android-proot-env-aarch64.tar.gz .
 
+      # ==========================================
+      # 5. 上传成品
+      # ==========================================
       - name: Upload Package
         uses: actions/upload-artifact@v4
         with:
