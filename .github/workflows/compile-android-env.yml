@@ -1,4 +1,4 @@
-name: 自动交叉编译 AAPT2 ARM64 真货
+name: 自动交叉编译 AAPT2 ARM64 静态真货
 
 on:
   push:
@@ -19,42 +19,58 @@ jobs:
           echo "==== 开始下载官方 NDK r28c (Linux-x86_64 版) ===="
           wget -q https://dl.google.com/android/repository/android-ndk-r28c-linux.zip -O ndk.zip
           unzip -q ndk.zip
-          echo "NDK 部署完成。"
+          echo "NDK 部署完成，绝对路径：$GITHUB_WORKSPACE/android-ndk-r28c"
 
-      - name: 3. 强行指定 AOSP 正统分支标签拉取真源码
+      - name: 3. 跨架构锻造：物理克隆社区完全剥离的 CMake 完美閉环 AAPT2 源码树 (彻底砸碎 404)
         run: |
           cd $GITHUB_WORKSPACE
-          echo "==== 拉取老哥验证过的 Android 14 正统标签源码 ===="
-          git clone --branch android-14.0.0_r50 --depth=1 https://github.com/aosp-mirror/platform_frameworks_base.git aosp-base
-          git clone --branch android-14.0.0_r50 --depth=1 https://github.com/aosp-mirror/platform_system_core.git aosp-core
+          echo "==== 开始克隆已经由 CMake 洗平所有 AOSP 复杂头文件依赖的独立 AAPT2 源码树 ===="
+          # 这个库把 aapt2 依赖的 google/protobuf, androidfw, cutils 所有的 .cpp 和 .h 按照标准 CMakeLists 融为了一体
+          git clone --depth=1 https://github.com/Xposed-Modules-Repo/aapt2-static.git aapt2-source
+          
+          echo "==== 验证 CMakeLists.txt 与核心头文件对齐状态 ===="
+          cd aapt2-source
+          ls -lh CMakeLists.txt
+          ls -d libs/*
 
-      - name: 4. 全量轰炸！将所有 .cpp 源码熔炼为 ARM64 二进制
+      - name: 4. 满血开开火！调用 NDK r28c 强行进行 aarch64 静态交叉编译
         run: |
-          cd $GITHUB_WORKSPACE
+          cd $GITHUB_WORKSPACE/aapt2-source
           
-          # 设置 NDK 交叉编译器绝对路径
-          export NDK_PATH=$GITHUB_WORKSPACE/android-ndk-r28c
-          export CXX=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang++
+          # 创建编译沙盒
+          mkdir build && cd build
           
-          # 物理对齐 AOSP 核心基础头文件搜索路径
-          export INCLUDES="-I$GITHUB_WORKSPACE/aosp-base/tools/aapt2 \
-                           -I$GITHUB_WORKSPACE/aosp-base/core/jni \
-                           -I$GITHUB_WORKSPACE/aosp-core/libutils/include \
-                           -I$GITHUB_WORKSPACE/aosp-core/libcutils/include \
-                           -I$GITHUB_WORKSPACE/aosp-core/include"
+          # 设定 NDK 工具链环境变量
+          export NDK_ROOT=$GITHUB_WORKSPACE/android-ndk-r28c
           
-          # 直接进入 aapt2 源码腹地
-          cd aosp-base/tools/aapt2
+          echo "==== Step 4.1: 开始利用 NDK 官方原生 Toolchain 注入 CMake 构建环境 ===="
+          # -DANDROID_ABI=arm64-v8a: 强制编译 aarch64 架构机器码
+          # -DANDROID_PLATFORM=android-35: 锁定最新的系统 API 级别
+          # -DANDROID_LINKER_FLAGS="-static": 关键！强行将所有依赖静态链接，确保丢进 PRoot/Termux 绝不报缺少.so错误
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$NDK_ROOT/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-35 \
+            -DANDROID_STL=c++_static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DANDROID_LINKER_FLAGS="-static"
+            
+          echo "==== Step 4.2: 开启多核 CPU 极限熔炼二进制 ==="
+          make -j$(nproc)
           
-          echo "==== 开始全量交叉编译 aapt2 目录下所有 C++ 源文件 ===="
-          # 这里使用 *.cpp 直接把目录下所有的核心实现全部打包编译成 ARM64 目标文件
-          # 并且开启静态链接参数（-static-libstdc++）确保丢进手机能直接跑
-          $CXX -std=c++17 -O3 $INCLUDES *.cpp -static-libstdc++ -o aapt2_arm64 || true
-          
-          echo "==== 检查当前目录是否成功孵化出 aapt2_arm64 成品 ===="
-          if [ -f "aapt2_arm64" ]; then
-            file aapt2_arm64
-            echo "【大功告成】物理成品已诞生！"
+          echo "==== 【物理铁证】全面验尸刚出锅的 aapt2 静态编译成品 ===="
+          if [ -f "aapt2" ]; then
+            echo "恭喜老哥！成品已被彻底干出来了！"
+            file aapt2
+            # 物理拷贝到工作区根目录，准备作为 Actions 产物上传
+            cp aapt2 $GITHUB_WORKSPACE/aapt2_linux_arm64_static
           else
-            echo "【卡点预警】全量编译未通过，正在等待捕获具体的 C++ 符号或头文件报错..."
+            echo "错误：编译未通过，未生成目标 aapt2 文件！"
+            exit 1
           fi
+
+      - name: 5. 最终闭环：将编译出来的 arm64 原生静态 aapt2 自动上传为 Action 附件 (提供直链)
+        uses: actions/upload-artifact@v4
+        with:
+          name: aapt2-static-arm64
+          path: ${{ github.workspace }}/aapt2_linux_arm64_static
