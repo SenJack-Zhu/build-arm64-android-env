@@ -1,7 +1,7 @@
 name: Compile Complete Android Build Environment for AARCH64
 
 on:
-  workflow_dispatch: # 支持手动点按钮一键开熔
+  workflow_dispatch:
 
 jobs:
   build-env:
@@ -16,19 +16,18 @@ jobs:
       - name: Checkout AOSP Tools Source
         uses: actions/checkout@v4
         with:
-          repository: 'JonForShort/android-tools' # 白嫖社区提炼好的 AOSP 工具集源码
+          repository: 'JonForShort/android-tools'
           submodules: 'recursive'
-          path: 'android-tools-source' # 显式指定克隆到一个固定命名的子文件夹里，绝不跟根目录混淆
+          path: 'android-tools-source'
 
       - name: Cross-Compile All Tools to Linux-AARCH64
-        # 物理焊死：强制让以下所有编译命令都在刚刚克隆下来的源码根目录下执行
+        # 强制在这个绝对路径下当阵地
         working-directory: ${{ github.workspace }}/android-tools-source
         run: |
-          # 1. 安全创建独立的编译坑位
-          mkdir -p build_aarch64 && cd build_aarch64
-          
-          # 2. 强行指定当前目录下的上一级（即源码根目录）进行交叉编译配置
-          cmake .. \
+          # 彻底废除 cd 命令！直接用 cmake 的 -B (Build输出路径) 和 -S (Source源码路径) 物理锁死！
+          # -S . 代表源码就在当前 working-directory
+          # -B build_out 代表编译生成的中间件全部丢进当前目录下的 build_out
+          cmake -S . -B build_out \
             -DCMAKE_SYSTEM_NAME=Linux \
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
             -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
@@ -36,15 +35,15 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -G Ninja
           
-          # 3. 物理开轰
-          ninja aapt aapt2 aidl zipalign
+          # 物理指定在编译输出目录下开轰
+          ninja -C build_out aapt aapt2 aidl zipalign
 
       - name: Package the Complete Environment Binaries
         working-directory: ${{ github.workspace }}/android-tools-source
         run: |
           mkdir -p android-env-aarch64
-          # 把刚刚在 build_aarch64 里热乎出炉的物理真神全部捞出来打包
-          cp build_aarch64/aapt build_aarch64/aapt2 build_aarch64/aidl build_aarch64/zipalign ./android-env-aarch64/
+          # 路径完全透明，直接去 build_out 捞货
+          cp build_out/aapt build_out/aapt2 build_out/aidl build_out/zipalign ./android-env-aarch64/
           tar -czvf ../android-env-aarch64.tar.gz android-env-aarch64
 
       - name: Upload Complete Android Environment
