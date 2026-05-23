@@ -22,29 +22,30 @@ jobs:
           echo "ANDROID_NDK_HOME=${{ github.workspace }}/ndk/android-ndk-r26b" >> $GITHUB_ENV
 
       # ==========================================
-      # 0. 垫脚石：先编译并注入 Extra CMake Modules (ECM)
+      # 0. 先编译并安装 Extra CMake Modules (ECM)
       # ==========================================
       - name: Clone and Install ECM into Sysroot
         run: |
           git clone --depth 1 https://github.com/KDE/extra-cmake-modules.git /tmp/ecm
           cd /tmp/ecm
-          # ECM 纯由 CMake 脚本构成，我们直接把它安装到交叉编译的 sysroot 根目录下
           cmake -B build -G Ninja \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot
           ninja -C build install
 
       # ==========================================
-      # 1. 核心骨架：Fcitx5 Core
+      # 1. Fcitx5 核心层编译 (直接用 -DECM_DIR 爆破)
       # ==========================================
       - name: Clone and Build Fcitx5 Core
         run: |
           git clone --depth 1 --branch 5.1.19 https://github.com/fcitx/fcitx5.git /tmp/fcitx5
           cd /tmp/fcitx5
-          # 加上 -DCMAKE_PREFIX_PATH，让 CMake 优先去我们的 sysroot 里捞刚装好的 ECM
+          
+          # 注意看这里新增的 -DECM_DIR 参数！直接指向刚刚生成的路径
           cmake -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-24 \
+            -DECM_DIR=${{ github.workspace }}/sysroot/share/ECM/cmake \
             -DCMAKE_PREFIX_PATH=${{ github.workspace }}/sysroot \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot \
             -DENABLE_SERVER=OFF \
@@ -53,7 +54,7 @@ jobs:
           ninja -C build install
 
       # ==========================================
-      # 2. 补全灵魂：就地整修 Librime
+      # 2. 就地整修 Librime
       # ==========================================
       - name: Clone and Build Librime
         run: |
@@ -81,6 +82,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-24 \
+            -DECM_DIR=${{ github.workspace }}/sysroot/share/ECM/cmake \
             -DCMAKE_PREFIX_PATH=${{ github.workspace }}/sysroot \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot
           ninja -C build install
