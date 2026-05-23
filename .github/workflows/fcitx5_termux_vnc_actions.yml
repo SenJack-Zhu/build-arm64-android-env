@@ -1,106 +1,81 @@
-name: Build Fcitx5 Ecosystem for Termux arm64
+name: Pure Native Cross-Build Fcitx5 ecosystem (arm64)
 
 on:
-  workflow_dispatch: # 支持在 GitHub Web 界面手动一键触发编译
+  workflow_dispatch:
 
 jobs:
-  build:
+  build-arm64:
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/termux/package-builder:latest
-
     steps:
       - name: Free up disk space
         run: |
           rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           df -h
 
-      - name: Clone Termux Packages Repository
+      - name: Install Host Build Essentials
         run: |
-          git clone --depth 1 https://github.com/termux/termux-packages.git /home/builder/termux-packages
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build extra-cmake-modules gettext libfmt-dev g++-aarch64-linux-gnu
 
-      - name: Align and Pin Component Versions
+      - name: Setup Android NDK
+        id: setup-ndk
         run: |
-          REPO_PATH="/home/builder/termux-packages"
-          
-          # 动态捕获组件路径
-          PATH_CORE=$(find $REPO_PATH -type f -name "build.sh" | grep -E "/fcitx5/build.sh|/fcitx5-core/build.sh" | head -n 1 | xargs dirname)
-          PATH_RIME=$(find $REPO_PATH -type f -name "build.sh" | grep "/fcitx5-rime/build.sh" | head -n 1 | xargs dirname)
-          PATH_ADDONS=$(find $REPO_PATH -type f -name "build.sh" | grep "/fcitx5-chinese-addons/build.sh" | head -n 1 | xargs dirname)
-          
-          if [ -z "$PATH_CORE" ] || [ -z "$PATH_RIME" ] || [ -z "$PATH_ADDONS" ]; then
-            echo "错误：未能在仓库中定位到 Fcitx5 系列组件！"
-            exit 1
-          fi
-          
-          echo "PKG_NAME_CORE=$(basename $PATH_CORE)" >> $GITHUB_ENV
-          echo "PKG_NAME_RIME=$(basename $PATH_RIME)" >> $GITHUB_ENV
-          echo "PKG_NAME_ADDONS=$(basename $PATH_ADDONS)" >> $GITHUB_ENV
+          mkdir -p ${{ github.workspace }}/ndk
+          cd ${{ github.workspace }}/ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+          unzip -q android-ndk-r26b-linux.zip
+          echo "ANDROID_NDK_HOME=${{ github.workspace }}/ndk/android-ndk-r26b" >> $GITHUB_ENV
 
-          # 强制对齐版本到 5.1.19 并跳过哈希校验
-          sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $PATH_CORE/build.sh
-          sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $PATH_RIME/build.sh
-          sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $PATH_ADDONS/build.sh
-          
-          echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $PATH_CORE/build.sh
-          echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $PATH_RIME/build.sh
-          echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $PATH_ADDONS/build.sh
-          
-          # 冲刷旧补丁
-          rm -f $PATH_CORE/patches/*
-          rm -f $PATH_RIME/patches/*
-          rm -f $PATH_ADDONS/patches/*
-
-      - name: Feed NDK to the Script
+      # ==========================================
+      # 1. 编译核心层：Fcitx5 Core
+      # ==========================================
+      - name: Clone and Build Fcitx5 Core
         run: |
-          # 既然脚本死盯着 /github/home/lib/android-ndk-r29 报错
-          # 咱们直接顺着它的心意创建目录，并把官方 NDK 塞进去
-          NDK_TARGET_DIR="/github/home/lib"
-          mkdir -p $NDK_TARGET_DIR
-          cd $NDK_TARGET_DIR
+          git clone --depth 1 --branch 5.1.19 https://github.com/fcitx/fcitx5.git /tmp/fcitx5
+          cd /tmp/fcitx5
           
-          echo "=== 正在拉取 Android NDK r29 (Linux 64-bit) ==="
-          # 从谷歌官方镜像拉取 r29 版本的 NDK（如果未来版本有微调，脚本通常也能识别）
-          wget -q https://dl.google.com/android/repository/android-ndk-r29-linux.zip
+          # 直接使用 Android NDK 自带的 toolchain 进行纯粹的原生交叉编译
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot \
+            -DENABLE_SERVER=OFF \
+            -DENABLE_X11=OFF \
+            -DENABLE_WAYLAND=OFF
+            
+          ninja -C build install
+
+      # ==========================================
+      # 2. 编译插件层：Fcitx5-Rime
+      # ==========================================
+      - name: Clone and Build Fcitx5-Rime
+        run: |
+          git clone --depth 1 --branch 5.1.19 https://github.com/fcitx/fcitx5-rime.git /tmp/fcitx5-rime
+          cd /tmp/fcitx5-rime
           
-          echo "=== 正在解压并就位 ==="
-          unzip -q android-ndk-r29-linux.zip
-          
-          # 确保解压出来的文件夹名字精准叫做 android-ndk-r29
-          if [ -d "android-ndk-r29" ]; then
-             echo "NDK 环境强行注入成功！"
-          else
-             # 有些压缩包解压出来带小版本号（如 android-ndk-r29-beta1），重命名适配之
-             mv android-ndk-r29* android-ndk-r29
-          fi
-          
-          rm -f android-ndk-r29-linux.zip
-          ls -ld $NDK_TARGET_DIR/android-ndk-r29
+          # 告诉 CMAKE 去哪里找刚刚编译好的核心库
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_PREFIX_PATH=${{ github.workspace }}/sysroot \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot
+            
+          ninja -C build install
 
-      - name: Build Fcitx5 Core
+      # ==========================================
+      # 3. 收集并打包编译产物
+      # ==========================================
+      - name: Package Custom Ecosystem Binaries
         run: |
-          cd /home/builder/termux-packages
-          ./build-package.sh -a aarch64 ${{ env.PKG_NAME_CORE }}
+          cd ${{ github.workspace }}/sysroot
+          tar -czf ${{ github.workspace }}/fcitx5-rime-arm64-v8a.tar.gz .
+          echo "=== 纯净交叉编译完成 ==="
+          ls -la ${{ github.workspace }}/fcitx5-rime-arm64-v8a.tar.gz
 
-      - name: Build Fcitx5 Chinese Addons
-        run: |
-          cd /home/builder/termux-packages
-          ./build-package.sh -a aarch64 ${{ env.PKG_NAME_ADDONS }}
-
-      - name: Build Fcitx5 Rime
-        run: |
-          cd /home/builder/termux-packages
-          ./build-package.sh -a aarch64 ${{ env.PKG_NAME_RIME }}
-
-      - name: Collect Debian Packages
-        run: |
-          mkdir -p /home/builder/output
-          find /home/builder/termux-packages/output -name "*.deb" -exec cp {} /home/builder/output/ \;
-          echo "=== 编译产物列表 ==="
-          ls -la /home/builder/output/
-
-      - name: Upload Artifacts
+      - name: Upload Pure Tarball
         uses: actions/upload-artifact@v4
         with:
-          name: fcitx5-arm64-debs
-          path: /home/builder/output/*.deb
+          name: fcitx5-custom-arm64
+          path: ${{ github.workspace }}/fcitx5-rime-arm64-v8a.tar.gz
