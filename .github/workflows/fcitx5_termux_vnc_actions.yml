@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/termux/package-builder:latest # 使用官方容器
+      image: ghcr.io/termux/package-builder:latest
 
     steps:
       - name: Free up disk space
@@ -17,52 +17,71 @@ jobs:
 
       - name: Clone Termux Packages Repository
         run: |
-          # 放弃 GitHub 工作区，直接在 container 内部 builder 用户的家目录下克隆
           git clone --depth 1 https://github.com/termux/termux-packages.git /home/builder/termux-packages
 
       - name: Align and Pin Component Versions
         run: |
-          CD_PATH="/home/builder/termux-packages/packages"
+          REPO_PATH="/home/builder/termux-packages"
           
-          # 1. 强制将三大核心组件的版本号全部对齐到 5.1.19
-          sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $CD_PATH/fcitx5/build.sh
-          sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $CD_PATH/fcitx5-rime/build.sh
-          sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $CD_PATH/fcitx5-chinese-addons/build.sh
+          # 动态、模糊地抓取真实目录路径，彻底解决包名不对的问题
+          PATH_CORE=$(find $REPO_PATH -type f -name "build.sh" | grep -E "/fcitx5/build.sh|/fcitx5-core/build.sh" | head -n 1 | xargs dirname)
+          PATH_RIME=$(find $REPO_PATH -type f -name "build.sh" | grep "/fcitx5-rime/build.sh" | head -n 1 | xargs dirname)
+          PATH_ADDONS=$(find $REPO_PATH -type f -name "build.sh" | grep "/fcitx5-chinese-addons/build.sh" | head -n 1 | xargs dirname)
           
-          # 2. 强行注入跳过 SHA256 源码校验的逻辑
-          echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $CD_PATH/fcitx5/build.sh
-          echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $CD_PATH/fcitx5-rime/build.sh
-          echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $CD_PATH/fcitx5-chinese-addons/build.sh
+          echo "=== 捕获到的真实生态路径 ==="
+          echo "Core:   $PATH_CORE"
+          echo "Rime:   $PATH_RIME"
+          echo "Addons: $PATH_ADDONS"
           
-          # 3. 清理掉旧版本残留的 patches，防止冲突
-          rm -f $CD_PATH/fcitx5/patches/*
-          rm -f $CD_PATH/fcitx5-rime/patches/*
-          rm -f $CD_PATH/fcitx5-chinese-addons/patches/*
+          # 严谨性校验：如果没抓到，直接报错拒绝往下走
+          if [ -z "$PATH_CORE" ] || [ -z "$PATH_RIME" ] || [ -z "$PATH_ADDONS" ]; then
+            echo "错误：未能在仓库中定位到 Fcitx5 系列组件的 build.sh！"
+            exit 1
+          fi
           
-          # 验证改写结果
-          echo "=== 检查对齐后的版本号 ==="
-          grep "TERMUX_PKG_VERSION=" $CD_PATH/fcitx5/build.sh
-          grep "TERMUX_PKG_VERSION=" $CD_PATH/fcitx5-rime/build.sh
-          grep "TERMUX_PKG_VERSION=" $CD_PATH/fcitx5-chinese-addons/build.sh
+          # 保存真实包名供给后续编译 Step 使用
+          echo "PKG_NAME_CORE=$(basename $PATH_CORE)" >> $GITHUB_ENV
+          echo "PKG_NAME_RIME=$(basename $PATH_RIME)" >> $GITHUB_ENV
+          echo "PKG_NAME_ADDONS=$(basename $PATH_ADDONS)" >> $GITHUB_ENV
+
+          # 1. 强制对齐版本号
+          sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $PATH_CORE/build.sh
+          sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $PATH_RIME/build.sh
+          sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $PATH_ADDONS/build.sh
+          
+          # 2. 注入跳过校验
+          echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $PATH_CORE/build.sh
+          echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $PATH_RIME/build.sh
+          echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $PATH_ADDONS/build.sh
+          
+          # 3. 清理残留补丁
+          rm -f $PATH_CORE/patches/*
+          rm -f $PATH_RIME/patches/*
+          rm -f $PATH_ADDONS/patches/*
+          
+          # 验证结果
+          echo "=== 检查对齐后的版本配置 ==="
+          grep "TERMUX_PKG_VERSION=" $PATH_CORE/build.sh
+          grep "TERMUX_PKG_VERSION=" $PATH_RIME/build.sh
+          grep "TERMUX_PKG_VERSION=" $PATH_ADDONS/build.sh
 
       - name: Build Fcitx5 Core
         run: |
           cd /home/builder/termux-packages
-          ./build-package.sh -a aarch64 fcitx5
+          ./build-package.sh -a aarch64 ${{ env.PKG_NAME_CORE }}
 
       - name: Build Fcitx5 Chinese Addons
         run: |
           cd /home/builder/termux-packages
-          ./build-package.sh -a aarch64 fcitx5-chinese-addons
+          ./build-package.sh -a aarch64 ${{ env.PKG_NAME_ADDONS }}
 
       - name: Build Fcitx5 Rime
         run: |
           cd /home/builder/termux-packages
-          ./build-package.sh -a aarch64 fcitx5-rime
+          ./build-package.sh -a aarch64 ${{ env.PKG_NAME_RIME }}
 
       - name: Collect Debian Packages
         run: |
-          # 在有权限的目录下打包产物
           mkdir -p /home/builder/output
           find /home/builder/termux-packages/output -name "*.deb" -exec cp {} /home/builder/output/ \;
           echo "=== 编译产物列表 ==="
@@ -72,5 +91,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fcitx5-arm64-debs
-          # 这里的 path 必须指到上传组件能访问到的绝对路径
           path: /home/builder/output/*.deb
