@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/termux/package-builder:latest # 借用 Termux 官方开箱即用的 Docker 编译环境
+      image: ghcr.io/termux/package-builder:latest # 使用官方容器
 
     steps:
       - name: Free up disk space
@@ -17,24 +17,24 @@ jobs:
 
       - name: Clone Termux Packages Repository
         run: |
-          # 将 Termux 官方打包仓库克隆到当前工作区
-          git clone --depth 1 https://github.com/termux/termux-packages.git ${{ github.workspace }}/termux-packages
+          # 放弃 GitHub 工作区，直接在 container 内部 builder 用户的家目录下克隆
+          git clone --depth 1 https://github.com/termux/termux-packages.git /home/builder/termux-packages
 
       - name: Align and Pin Component Versions
         run: |
-          CD_PATH="${{ github.workspace }}/termux-packages/packages"
+          CD_PATH="/home/builder/termux-packages/packages"
           
           # 1. 强制将三大核心组件的版本号全部对齐到 5.1.19
           sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $CD_PATH/fcitx5/build.sh
           sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $CD_PATH/fcitx5-rime/build.sh
           sed -i 's/TERMUX_PKG_VERSION=.*/TERMUX_PKG_VERSION="5.1.19"/' $CD_PATH/fcitx5-chinese-addons/build.sh
           
-          # 2. 强行注入跳过 SHA256 源码校验的逻辑（因为改了版本号，老校验码必然失效）
+          # 2. 强行注入跳过 SHA256 源码校验的逻辑
           echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $CD_PATH/fcitx5/build.sh
           echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $CD_PATH/fcitx5-rime/build.sh
           echo "TERMUX_PKG_SKIP_SRC_SHA256=true" >> $CD_PATH/fcitx5-chinese-addons/build.sh
           
-          # 3. 清理掉旧版本残留的 patches，防止跨版本打补丁冲突导致编译中断
+          # 3. 清理掉旧版本残留的 patches，防止冲突
           rm -f $CD_PATH/fcitx5/patches/*
           rm -f $CD_PATH/fcitx5-rime/patches/*
           rm -f $CD_PATH/fcitx5-chinese-addons/patches/*
@@ -47,30 +47,30 @@ jobs:
 
       - name: Build Fcitx5 Core
         run: |
-          cd ${{ github.workspace }}/termux-packages
-          # 调用官方构建脚本，全自动处理 NDK 交叉编译及 arm64 依赖依赖拓扑
+          cd /home/builder/termux-packages
           ./build-package.sh -a aarch64 fcitx5
 
       - name: Build Fcitx5 Chinese Addons
         run: |
-          cd ${{ github.workspace }}/termux-packages
+          cd /home/builder/termux-packages
           ./build-package.sh -a aarch64 fcitx5-chinese-addons
 
       - name: Build Fcitx5 Rime
         run: |
-          cd ${{ github.workspace }}/termux-packages
+          cd /home/builder/termux-packages
           ./build-package.sh -a aarch64 fcitx5-rime
 
       - name: Collect Debian Packages
         run: |
-          # 创建输出目录并将编译完成的 arm64 .deb 包捞出来
-          mkdir -p ${{ github.workspace }}/output
-          find ${{ github.workspace }}/termux-packages/output -name "*.deb" -exec cp {} ${{ github.workspace }}/output/ \;
+          # 在有权限的目录下打包产物
+          mkdir -p /home/builder/output
+          find /home/builder/termux-packages/output -name "*.deb" -exec cp {} /home/builder/output/ \;
           echo "=== 编译产物列表 ==="
-          ls -la ${{ github.workspace }}/output/
+          ls -la /home/builder/output/
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: fcitx5-arm64-debs
-          path: ${{ github.workspace }}/output/*.deb
+          # 这里的 path 必须指到上传组件能访问到的绝对路径
+          path: /home/builder/output/*.deb
