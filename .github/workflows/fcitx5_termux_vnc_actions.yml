@@ -33,14 +33,14 @@ jobs:
           ninja -C build install
 
       # ==========================================
-      # 1. Fcitx5 核心层编译 (直接用 -DECM_DIR 爆破)
+      # 1. Fcitx5 核心层编译 (精简移动端多余依赖)
       # ==========================================
       - name: Clone and Build Fcitx5 Core
         run: |
           git clone --depth 1 --branch 5.1.19 https://github.com/fcitx/fcitx5.git /tmp/fcitx5
           cd /tmp/fcitx5
           
-          # 注意看这里新增的 -DECM_DIR 参数！直接指向刚刚生成的路径
+          # 重点：新增了剪除桌面端重型依赖的参数
           cmake -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
@@ -50,7 +50,9 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot \
             -DENABLE_SERVER=OFF \
             -DENABLE_X11=OFF \
-            -DENABLE_WAYLAND=OFF
+            -DENABLE_WAYLAND=OFF \
+            -DENABLE_DBUS=OFF \
+            -DUSE_SYSTEM_LIBUV=OFF
           ninja -C build install
 
       # ==========================================
