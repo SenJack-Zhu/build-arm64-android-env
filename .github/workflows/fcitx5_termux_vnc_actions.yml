@@ -7,11 +7,10 @@ jobs:
   build-arm64:
     runs-on: ubuntu-latest
     steps:
-      # 直接切入正题，不再碰任何敏感系统目录
       - name: Install Host Build Essentials
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build extra-cmake-modules gettext libfmt-dev g++-aarch64-linux-gnu
+          sudo apt-get install -y cmake ninja-build gettext libfmt-dev g++-aarch64-linux-gnu
 
       - name: Setup Android NDK
         id: setup-ndk
@@ -23,16 +22,30 @@ jobs:
           echo "ANDROID_NDK_HOME=${{ github.workspace }}/ndk/android-ndk-r26b" >> $GITHUB_ENV
 
       # ==========================================
+      # 0. 垫脚石：先编译并注入 Extra CMake Modules (ECM)
+      # ==========================================
+      - name: Clone and Install ECM into Sysroot
+        run: |
+          git clone --depth 1 https://github.com/KDE/extra-cmake-modules.git /tmp/ecm
+          cd /tmp/ecm
+          # ECM 纯由 CMake 脚本构成，我们直接把它安装到交叉编译的 sysroot 根目录下
+          cmake -B build -G Ninja \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot
+          ninja -C build install
+
+      # ==========================================
       # 1. 核心骨架：Fcitx5 Core
       # ==========================================
       - name: Clone and Build Fcitx5 Core
         run: |
           git clone --depth 1 --branch 5.1.19 https://github.com/fcitx/fcitx5.git /tmp/fcitx5
           cd /tmp/fcitx5
+          # 加上 -DCMAKE_PREFIX_PATH，让 CMake 优先去我们的 sysroot 里捞刚装好的 ECM
           cmake -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_PREFIX_PATH=${{ github.workspace }}/sysroot \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot \
             -DENABLE_SERVER=OFF \
             -DENABLE_X11=OFF \
@@ -40,7 +53,7 @@ jobs:
           ninja -C build install
 
       # ==========================================
-      # 2. 补全灵魂：就地整修 Librime (防止引擎断层)
+      # 2. 补全灵魂：就地整修 Librime
       # ==========================================
       - name: Clone and Build Librime
         run: |
@@ -50,6 +63,7 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_PREFIX_PATH=${{ github.workspace }}/sysroot \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot \
             -DBUILD_SHARED_LIBS=ON \
             -DBUILD_STATIC=OFF \
