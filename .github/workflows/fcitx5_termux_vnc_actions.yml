@@ -7,11 +7,7 @@ jobs:
   build-arm64:
     runs-on: ubuntu-latest
     steps:
-      - name: Free up disk space
-        run: |
-          rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          df -h
-
+      # 直接切入正题，不再碰任何敏感系统目录
       - name: Install Host Build Essentials
         run: |
           sudo apt-get update
@@ -27,14 +23,12 @@ jobs:
           echo "ANDROID_NDK_HOME=${{ github.workspace }}/ndk/android-ndk-r26b" >> $GITHUB_ENV
 
       # ==========================================
-      # 1. 编译核心层：Fcitx5 Core
+      # 1. 核心骨架：Fcitx5 Core
       # ==========================================
       - name: Clone and Build Fcitx5 Core
         run: |
           git clone --depth 1 --branch 5.1.19 https://github.com/fcitx/fcitx5.git /tmp/fcitx5
           cd /tmp/fcitx5
-          
-          # 直接使用 Android NDK 自带的 toolchain 进行纯粹的原生交叉编译
           cmake -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
@@ -43,35 +37,48 @@ jobs:
             -DENABLE_SERVER=OFF \
             -DENABLE_X11=OFF \
             -DENABLE_WAYLAND=OFF
-            
           ninja -C build install
 
       # ==========================================
-      # 2. 编译插件层：Fcitx5-Rime
+      # 2. 补全灵魂：就地整修 Librime (防止引擎断层)
+      # ==========================================
+      - name: Clone and Build Librime
+        run: |
+          git clone --depth 1 https://github.com/rime/librime.git /tmp/librime
+          cd /tmp/librime
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot \
+            -DBUILD_SHARED_LIBS=ON \
+            -DBUILD_STATIC=OFF \
+            -DBUILD_TEST=OFF
+          ninja -C build install
+
+      # ==========================================
+      # 3. 终极合体：Fcitx5-Rime 桥接插件
       # ==========================================
       - name: Clone and Build Fcitx5-Rime
         run: |
           git clone --depth 1 --branch 5.1.19 https://github.com/fcitx/fcitx5-rime.git /tmp/fcitx5-rime
           cd /tmp/fcitx5-rime
-          
-          # 告诉 CMAKE 去哪里找刚刚编译好的核心库
           cmake -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-24 \
             -DCMAKE_PREFIX_PATH=${{ github.workspace }}/sysroot \
             -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/sysroot
-            
           ninja -C build install
 
       # ==========================================
-      # 3. 收集并打包编译产物
+      # 4. 打包输出
       # ==========================================
       - name: Package Custom Ecosystem Binaries
         run: |
           cd ${{ github.workspace }}/sysroot
           tar -czf ${{ github.workspace }}/fcitx5-rime-arm64-v8a.tar.gz .
-          echo "=== 纯净交叉编译完成 ==="
+          echo "=== 纯净交叉编译矩阵完美合拢 ==="
           ls -la ${{ github.workspace }}/fcitx5-rime-arm64-v8a.tar.gz
 
       - name: Upload Pure Tarball
