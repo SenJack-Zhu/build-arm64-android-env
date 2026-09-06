@@ -1,0 +1,57 @@
+name: Build Termux Arm64 Wheels
+
+on:
+  workflow_dispatch: # 支持在 GitHub 页面手动触发运行
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build-android-wheels:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' # 推荐使用 3.11/3.12 确保兼容性
+
+      - name: Install NDK & Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3-dev clang
+          
+          # 下载并设置 Android NDK (r26b)
+          NDK_VERSION="r26b"
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux.zip -d $HOME/
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Install Wheel Building Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install wheel setuptools cibuildwheel
+
+      - name: Build tree-sitter for Android ARM64
+        run: |
+          # 设置交叉编译环境变量（针对 Termux 的 aarch64-linux-android）
+          export NDK_PATH=$ANDROID_NDK_HOME
+          export TOOLCHAIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android24-clang
+          export CXX=$TOOLCHAIN/bin/aarch64-linux-android24-clang++
+          export AR=$TOOLCHAIN/bin/llvm-ar
+          export LD=$TOOLCHAIN/bin/ld
+          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+
+          mkdir -p output_wheels
+          
+          # 拉取 tree-sitter 源码并直接编译为 wheel
+          pip wheel tree-sitter==0.26.0 --no-binary :all: -w output_wheels/
+
+      - name: Upload Built Wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: termux-tree-sitter-wheels
+          path: output_wheels/*.whl
