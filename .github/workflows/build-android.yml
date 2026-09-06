@@ -19,10 +19,10 @@ jobs:
       - name: Build wheel via NDK docker
         run: |
           mkdir -p output_wheels
-          # 使用 dockcross 的 android-arm64 镜像，强制从 C 源码编译
+          # 加上 --break-system-packages 绕过 PEP 668 保护限制
           docker run --rm -v $(pwd):/work dockcross/android-arm64 bash -c "
-            python3 -m pip install --upgrade pip setuptools wheel && \
-            pip wheel tree-sitter==0.26.0 --no-binary :all: -w /work/output_wheels/
+            python3 -m pip install --upgrade pip setuptools wheel --break-system-packages && \
+            pip wheel tree-sitter==0.26.0 --no-binary :all: --break-system-packages -w /work/output_wheels/
           "
 
       - name: Upload Built Wheels
