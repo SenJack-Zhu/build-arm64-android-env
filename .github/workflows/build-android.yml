@@ -19,10 +19,10 @@ jobs:
       - name: Build wheel via NDK docker
         run: |
           mkdir -p output_wheels
-          # 加上 --break-system-packages 绕过 PEP 668 保护限制
-          docker run --rm -v $(pwd):/work dockcross/android-arm64 bash -c "
-            python3 -m pip install --upgrade pip setuptools wheel --break-system-packages && \
-            pip wheel tree-sitter==0.26.0 --no-binary :all: --break-system-packages -w /work/output_wheels/
+          # 通过环境变量全局开启 PIP_BREAK_SYSTEM_PACKAGES，并移除 pip wheel 命令中的无效参数
+          docker run --rm -e PIP_BREAK_SYSTEM_PACKAGES=1 -v $(pwd):/work dockcross/android-arm64 bash -c "
+            python3 -m pip install --upgrade pip setuptools wheel && \
+            pip wheel tree-sitter==0.26.0 --no-binary :all: -w /work/output_wheels/
           "
 
       - name: Upload Built Wheels
