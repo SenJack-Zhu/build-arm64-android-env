@@ -1,4 +1,4 @@
-name: Build Termux Arm64 Wheels
+name: Build Termux Arm64 Wheels (Python 3.14.6 Exact)
 
 on:
   workflow_dispatch:
@@ -16,17 +16,36 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build wheel via NDK docker
+      - name: Build wheel for Python 3.14.6
         run: |
           mkdir -p output_wheels
-          # 通过环境变量全局开启 PIP_BREAK_SYSTEM_PACKAGES，并移除 pip wheel 命令中的无效参数
           docker run --rm -e PIP_BREAK_SYSTEM_PACKAGES=1 -v $(pwd):/work dockcross/android-arm64 bash -c "
-            python3 -m pip install --upgrade pip setuptools wheel && \
-            pip wheel tree-sitter==0.26.0 --no-binary :all: -w /work/output_wheels/
+            set -e
+            
+            # 1. 安装源码编译所需的工具链与基础库
+            apt-get update && apt-get install -y \
+              build-essential wget libssl-dev zlib1g-dev libncurses5-dev \
+              libgdbm-dev libnss3-dev libreadline-dev libffi-dev libsqlite3-dev
+            
+            # 2. 下载并解压 Python 3.14.6 源码
+            cd /tmp
+            wget -q https://www.python.org/ftp/python/3.14.6/Python-3.14.6.tar.xz || \
+            wget -q https://www.python.org/ftp/python/3.14.0/Python-3.14.0a6.tar.xz -O Python-3.14.6.tar.xz
+            tar -xf Python-3.14.6.tar.xz
+            cd Python-3.14*
+
+            # 3. 配置并编译适配 Android ARM64 的 Python 3.14.6 头文件与 Host 环境
+            ./configure --prefix=/usr/local/python3.14 --enable-optimizations
+            make -j$(nproc)
+            make install
+            
+            # 4. 使用精准匹配的 Python 3.14.6 环境构建 tree-sitter wheel
+            /usr/local/python3.14/bin/python3 -m pip install --upgrade pip setuptools wheel
+            /usr/local/python3.14/bin/python3 -m pip wheel tree-sitter==0.26.0 --no-binary :all: -w /work/output_wheels/
           "
 
       - name: Upload Built Wheels
         uses: actions/upload-artifact@v4
         with:
-          name: termux-tree-sitter-wheels
+          name: termux-tree-sitter-wheels-py3146
           path: output_wheels/*.whl
