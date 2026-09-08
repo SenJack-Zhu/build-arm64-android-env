@@ -1,4 +1,4 @@
-name: Build Termux Arm64 Wheels (Python 3.14.6 Exact)
+name: Build Termux Arm64 Wheels (tokenizers & tree-sitter)
 
 on:
   workflow_dispatch:
@@ -10,42 +10,47 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build wheel for Python 3.14.6
+      - name: Build Wheels for Termux Android ARM64
         run: |
           mkdir -p output_wheels
           docker run --rm -e PIP_BREAK_SYSTEM_PACKAGES=1 -v $(pwd):/work dockcross/android-arm64 bash -c "
             set -e
             
-            # 1. 安装源码编译所需的工具链与基础库
+            # 1. 安装基础编译依赖与 Rust 工具链
             apt-get update && apt-get install -y \
-              build-essential wget libssl-dev zlib1g-dev libncurses5-dev \
-              libgdbm-dev libnss3-dev libreadline-dev libffi-dev libsqlite3-dev
+              build-essential wget curl libssl-dev zlib1g-dev libffi-dev pkg-config
             
-            # 2. 下载并解压 Python 3.14.6 源码
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            source \$HOME/.cargo/env
+            rustup target add aarch64-linux-android
+            
+            # 2. 构建 Host 端的 Python 3.14 环境以提供 Include 头文件
             cd /tmp
-            wget -q https://www.python.org/ftp/python/3.14.6/Python-3.14.6.tar.xz || \
-            wget -q https://www.python.org/ftp/python/3.14.0/Python-3.14.0a6.tar.xz -O Python-3.14.6.tar.xz
-            tar -xf Python-3.14.6.tar.xz
+            wget -q https://www.python.org/ftp/python/3.14.0/Python-3.14.0b1.tar.xz || \
+            wget -q https://www.python.org/ftp/python/3.13.0/Python-3.13.0.tar.xz -O Python-3.14.0b1.tar.xz
+            tar -xf Python-3.14.0b1.tar.xz
             cd Python-3.14*
-
-            # 3. 配置并编译适配 Android ARM64 的 Python 3.14.6 头文件与 Host 环境
-            ./configure --prefix=/usr/local/python3.14 --enable-optimizations
-            make -j$(nproc)
-            make install
+            ./configure --prefix=/usr/local/python3.14
+            make -j\$(nproc) && make install
             
-            # 4. 使用精准匹配的 Python 3.14.6 环境构建 tree-sitter wheel
-            /usr/local/python3.14/bin/python3 -m pip install --upgrade pip setuptools wheel
-            /usr/local/python3.14/bin/python3 -m pip wheel tree-sitter==0.26.0 --no-binary :all: -w /work/output_wheels/
+            # 3. 设置 PyO3 / Rust 关键交叉编译环境变量（强制绑定符号）
+            export PYO3_PYTHON=/usr/local/python3.14/bin/python3
+            export PYO3_CROSS_PYTHON_VERSION=3.14
+            export RUSTFLAGS=\"-C link-arg=-Wl,-undefined,dynamic_lookup -C link-arg=-z -C link-arg=undefs\"
+            
+            # 4. 升级构建工具并编译 tokenizers 与 tree-sitter 的 Wheel 包
+            /usr/local/python3.14/bin/python3 -m pip install --upgrade pip setuptools wheel maturin
+            /usr/local/python3.14/bin/python3 -m pip wheel tokenizers==0.23.2 tree-sitter==0.26.0 --no-binary :all: -w /work/output_wheels/
           "
 
       - name: Upload Built Wheels
         uses: actions/upload-artifact@v4
         with:
-          name: termux-tree-sitter-wheels-py3146
+          name: termux-arm64-wheels-py314
           path: output_wheels/*.whl
